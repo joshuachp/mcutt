@@ -13,3 +13,5 @@ repository = "https://github.com/joshuachp/mcutt"
 description = "mcutt is a simple and transport agnostic MQTT v3.1 client library"
 
 [dependencies]
+zerocopy = { version = "0.7.0", default-features = false, features = ["byteorder"] }
+zerocopy-derive = "0.7.0"
