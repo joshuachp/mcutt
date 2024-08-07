@@ -20,3 +20,11 @@ repos:
       - id: rust-test-doc
       - id: rust-hack
       - id: rust-min-ver
+  - repo: local
+    hooks:
+      - id: rust-msrv
+        name: check rust msrv
+        description: Check the MSRV
+        language: system
+        pass_filenames: false
+        entry: cargo +1.72.1 check --all-features

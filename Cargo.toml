@@ -10,6 +10,7 @@ edition = "2021"
 keywords = ["mqtt", "iot", "networking"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joshuachp/mcutt"
+rust-version = "1.72.0"
 description = "mcutt is a simple and transport agnostic MQTT v3.1 client library"
 
 [dependencies]
