@@ -27,4 +27,4 @@ repos:
         description: Check the MSRV
         language: system
         pass_filenames: false
-        entry: cargo +1.72.1 check --all-features
+        entry: cargo +1.72 check --all-features

@@ -15,5 +15,8 @@ description = "mcutt is a simple and transport agnostic MQTT v3.1 client library
 
 [dependencies]
 bitflags = "2.0.0"
-zerocopy = { version = "0.7.0", default-features = false, features = ["byteorder"] }
-zerocopy-derive = "0.7.31"
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]

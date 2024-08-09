@@ -1,60 +1,132 @@
 //! Data representation of MQTT packets
 
-use bitflags::bitflags;
-use zerocopy::byteorder::network_endian::U16;
-use zerocopy::{ByteSlice, Ref};
+use core::{fmt::Display, mem, ops::Deref};
 
-/// UTF-8 encoded string.
+#[cfg(feature = "std")]
+use std::error::Error;
+
+use bitflags::bitflags;
+
+use crate::bytes::{read_chunk, read_exact, read_u16, read_u8};
+
+#[derive(Debug)]
+pub enum DecodeError {
+    NotEnoughBytes {
+        needed: usize,
+        actual: usize,
+    },
+    Utf8,
+    RemainingLengthBytes,
+    ControlFlags {
+        packet_type: ControlPacketType,
+        flags: TypeFlags,
+    },
+    PacketType(u8),
+    MaxRemainingLength(u32),
+}
+
+impl Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DecodeError::NotEnoughBytes { needed, actual } => {
+                write!(
+                    f,
+                    "not enough bytes, buffer contains {actual} but {needed} were needed"
+                )
+            }
+            DecodeError::Utf8 => write!(f, "the string was not UTF-8 encoded"),
+            DecodeError::RemainingLengthBytes => {
+                write!(f, "remaining length exceeded the maximum of 4 bytes")
+            }
+            DecodeError::ControlFlags { packet_type, flags } => {
+                write!(f, "invalid control packet flags {flags} for {packet_type}")
+            }
+            DecodeError::PacketType(packet_type) => {
+                write!(f, "invalid control packet type {packet_type}")
+            }
+            DecodeError::MaxRemainingLength(value) => {
+                write!(
+                    f,
+                    "remaining length {value} is bigger than the maximum {}",
+                    RemainingLength::MAX
+                )
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Error for DecodeError {}
+
+/// Parses UTF-8 encoded string.
 ///
 /// Text fields in the Control Packets described later are encoded as UTF-8 strings.
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718016>
-pub fn parse_str<'a, B: ByteSlice + 'a>(bytes: B) -> Option<(&'a str, B)> {
-    let (length, bytes) = Ref::<B, U16>::new_from_prefix(bytes).unwrap();
+pub fn parse_str(bytes: &[u8]) -> Result<(&str, &[u8]), DecodeError> {
+    let (length, rest) = read_u16(bytes)?;
 
-    let length = usize::from(length.read());
+    let (data, rest) = read_exact(rest, length.into())?;
 
-    let (data, bytes) = Ref::new_slice_from_prefix(bytes, length)?;
-
-    core::str::from_utf8(data.into_slice())
-        .ok()
-        .map(|s| (s, bytes))
+    core::str::from_utf8(data)
+        .map(|s| (s, rest))
+        .map_err(|_| DecodeError::Utf8)
 }
 
-pub struct RawFixedHeader<B> {
+/// Raw fixed header.
+///
+/// This doesn't check the validity of the packet it self.
+#[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]
+struct RawFixedHeader<'a, const N: usize> {
     type_flags: u8,
-    remaining_length: B,
+    remaining_length: &'a [u8; N],
 }
 
 const CONTINUE_FLAG: u8 = 0b10000000;
 const VALUE_MASK: u8 = !CONTINUE_FLAG;
 
-impl<B: ByteSlice> RawFixedHeader<B> {
-    pub fn parse(bytes: B) -> Option<(Self, B)> {
-        let (type_flags, rest) = Ref::<B, u8>::new_from_prefix(bytes)?;
+impl<'a, const N: usize> RawFixedHeader<'a, N> {
+    const _CHECK: () = assert!(N <= 4);
 
-        // Count the bytes in the remaining length
-        let count = rest
-            .iter()
-            .take_while(|&b| CONTINUE_FLAG & *b != 0)
-            // Take 5 to check the that there are at most 4 bytes
-            .take(5)
-            .count();
+    fn read(bytes: &'a [u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (type_flags, rest) = read_u8(bytes)?;
 
-        // Too many or none bytes in remaining length
-        if !(1..=4).contains(&count) {
-            return None;
-        }
+        let (remaining_length, rest) = read_chunk(rest)?;
 
-        let (remaining_length, rest) = rest.split_at(count);
-
-        Some((
+        Ok((
             Self {
-                type_flags: *type_flags,
+                type_flags,
                 remaining_length,
             },
             rest,
         ))
+    }
+
+    /// The bytes must be a valid remaining length.
+    fn read_packet_type(&self) -> u8 {
+        self.type_flags >> 4
+    }
+
+    /// The bytes must be a valid remaining length.
+    fn read_remaining_length(&self) -> u32 {
+        let mut multiplier = 1;
+
+        self.remaining_length
+            .iter()
+            .map(|b| {
+                let value = u32::from(b & VALUE_MASK);
+                let value = value * multiplier;
+
+                multiplier *= 128;
+
+                value
+            })
+            .sum()
+    }
+
+    fn read_packet_flags(&self) -> u8 {
+        self.type_flags & TypeFlags::MASK.bits()
     }
 }
 
@@ -62,7 +134,7 @@ impl<B: ByteSlice> RawFixedHeader<B> {
 pub struct FixedHeader {
     packet_type: ControlPacketType,
     flags: TypeFlags,
-    remaining_length: u32,
+    remaining_length: RemainingLength,
 }
 
 impl FixedHeader {
@@ -74,50 +146,52 @@ impl FixedHeader {
         &self.flags
     }
 
-    pub fn remaining_length(&self) -> u32 {
+    pub fn remaining_length(&self) -> RemainingLength {
         self.remaining_length
     }
-}
 
-impl<B: ByteSlice> TryFrom<RawFixedHeader<B>> for FixedHeader {
-    type Error = ();
+    pub fn parse(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let mut c_flag = true;
 
-    fn try_from(value: RawFixedHeader<B>) -> Result<Self, Self::Error> {
-        let packet_type = value
-            .type_flags
-            .checked_shr(4)
-            .ok_or(())
-            .and_then(ControlPacketType::try_from)?;
+        // Count the bytes in the remaining length
+        let count = bytes
+            .iter()
+            .skip(1)
+            .take_while(|&b| {
+                // This stores the continue flag check for next iteration
+                mem::replace(&mut c_flag, CONTINUE_FLAG & *b != 0)
+            })
+            // Take 5 to check the that there are at most 4 bytes
+            .take(5)
+            .count();
 
-        // We already unset all the bits with the mask
-        let flags = TypeFlags::from_bits_retain(value.type_flags & TypeFlags::MASK.bits());
-
-        match packet_type {
-            // All flgs can be set
-            ControlPacketType::Publish => {}
-            ControlPacketType::PubRel => {
-                if flags.0 != TypeFlags::PUBREL.0 {
-                    return Err(());
-                }
-            }
-            ControlPacketType::Subscribe => {
-                if flags.0 != TypeFlags::SUBSCRIBE.0 {
-                    return Err(());
-                }
-            }
-            ControlPacketType::Unsubscribe => {
-                if flags.0 != TypeFlags::UNSUBSCRIBE.0 {
-                    return Err(());
-                }
-            }
-            _ => {
-                if !flags.is_empty() {
-                    return Err(());
-                }
-            }
+        match count {
+            0 => Err(DecodeError::NotEnoughBytes {
+                needed: 1,
+                actual: 0,
+            }),
+            1 => Self::parse_with_length::<1>(bytes),
+            2 => Self::parse_with_length::<2>(bytes),
+            3 => Self::parse_with_length::<3>(bytes),
+            4 => Self::parse_with_length::<4>(bytes),
+            _ => Err(DecodeError::RemainingLengthBytes),
         }
+    }
 
-        let remaining_length = remaining_length_to_u32(value.remaining_length);
+    fn parse_with_length<const N: usize>(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = RawFixedHeader::<N>::read(bytes)?;
+
+        let fixed = FixedHeader::from_raw(raw)?;
+
+        Ok((fixed, rest))
+    }
+
+    /// Internal conversion since we already checked the length of remaining packets
+    fn from_raw<const N: usize>(raw: RawFixedHeader<N>) -> Result<Self, DecodeError> {
+        let packet_type = ControlPacketType::try_from(raw.read_packet_type())?;
+        let flags = packet_type.read_flags(raw.read_packet_flags())?;
+        // This was validated while reading the raw
+        let remaining_length = RemainingLength(raw.read_remaining_length());
 
         Ok(Self {
             packet_type,
@@ -127,24 +201,7 @@ impl<B: ByteSlice> TryFrom<RawFixedHeader<B>> for FixedHeader {
     }
 }
 
-/// The bytes must be a valid remaining length.
-fn remaining_length_to_u32<B: ByteSlice>(remaining_length: B) -> u32 {
-    let mut multiplier = 1;
-
-    remaining_length
-        .iter()
-        .map(|b| {
-            let value = u32::from(b & VALUE_MASK);
-            let value = value * multiplier;
-
-            multiplier *= 128;
-
-            value
-        })
-        .sum()
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ControlPacketType {
     Connect = 1,
@@ -163,8 +220,73 @@ pub enum ControlPacketType {
     Disconnect = 14,
 }
 
+impl ControlPacketType {
+    pub fn read_flags(&self, flags: u8) -> Result<TypeFlags, DecodeError> {
+        let flags = TypeFlags::from_bits_retain(flags & TypeFlags::MASK.bits());
+
+        match self {
+            ControlPacketType::Publish => {}
+            ControlPacketType::PubRel => {
+                if flags != TypeFlags::PUBREL {
+                    return Err(DecodeError::ControlFlags {
+                        packet_type: *self,
+                        flags,
+                    });
+                }
+            }
+            ControlPacketType::Subscribe => {
+                if flags != TypeFlags::SUBSCRIBE {
+                    return Err(DecodeError::ControlFlags {
+                        packet_type: *self,
+                        flags,
+                    });
+                }
+            }
+            ControlPacketType::Unsubscribe => {
+                if flags != TypeFlags::UNSUBSCRIBE {
+                    return Err(DecodeError::ControlFlags {
+                        packet_type: *self,
+                        flags,
+                    });
+                }
+            }
+            _ => {
+                if !flags.is_empty() {
+                    return Err(DecodeError::ControlFlags {
+                        packet_type: *self,
+                        flags,
+                    });
+                }
+            }
+        }
+
+        Ok(flags)
+    }
+}
+
+impl Display for ControlPacketType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ControlPacketType::Connect => write!(f, "CONNECT({})", *self as u8),
+            ControlPacketType::ConnAck => write!(f, "CONNACK({})", *self as u8),
+            ControlPacketType::Publish => write!(f, "PUBLISH({})", *self as u8),
+            ControlPacketType::PubAck => write!(f, "PUBACK({})", *self as u8),
+            ControlPacketType::PubRec => write!(f, "PUBREC({})", *self as u8),
+            ControlPacketType::PubRel => write!(f, "PUBREL({})", *self as u8),
+            ControlPacketType::PubComp => write!(f, "PUBCOMP({})", *self as u8),
+            ControlPacketType::Subscribe => write!(f, "SUBSCRIBE({})", *self as u8),
+            ControlPacketType::SubAck => write!(f, "SUBACK({})", *self as u8),
+            ControlPacketType::Unsubscribe => write!(f, "UNSUBSCRIBE({})", *self as u8),
+            ControlPacketType::UnsubAck => write!(f, "UNSUBACK({})", *self as u8),
+            ControlPacketType::PingReq => write!(f, "PINGREQ({})", *self as u8),
+            ControlPacketType::PingResp => write!(f, "PINGRESP({})", *self as u8),
+            ControlPacketType::Disconnect => write!(f, "DISCONNECT({})", *self as u8),
+        }
+    }
+}
+
 impl TryFrom<u8> for ControlPacketType {
-    type Error = ();
+    type Error = DecodeError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         let value = match value {
@@ -182,7 +304,7 @@ impl TryFrom<u8> for ControlPacketType {
             12 => ControlPacketType::PingReq,
             13 => ControlPacketType::PingResp,
             14 => ControlPacketType::Disconnect,
-            _ => return Err(()),
+            _ => return Err(DecodeError::PacketType(value)),
         };
 
         Ok(value)
@@ -190,7 +312,7 @@ impl TryFrom<u8> for ControlPacketType {
 }
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TypeFlags: u8 {
         const MASK = 0b00001111;
 
@@ -202,6 +324,40 @@ bitflags! {
         const PUBREL = 0b0010;
         const SUBSCRIBE = 0b0010;
         const UNSUBSCRIBE = 0b0010;
+    }
+}
+
+impl Display for TypeFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:04}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RemainingLength(u32);
+
+impl RemainingLength {
+    /// Maximum value of the remaining length
+    pub const MAX: u32 = 268_435_455;
+}
+
+impl TryFrom<u32> for RemainingLength {
+    type Error = DecodeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value > Self::MAX {
+            return Err(DecodeError::MaxRemainingLength(value));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl Deref for RemainingLength {
+    type Target = u32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -233,18 +389,24 @@ mod tests {
     }
 
     #[test]
-    fn should_convert_remaining_length() {
-        let data: [(u32, &[u8]); 4] = [
-            (0, &[0x00]),
-            (128, &[0x80, 0x01]),
-            (16384, &[0x80, 0x80, 0x01]),
-            (2097152, &[0x80, 0x80, 0x80, 0x01]),
+    fn should_parse_fixed_headers_remaining_length() {
+        let data: &[(u32, &[u8])] = &[
+            (0, &[0b00010000, 0x00]),
+            (127, &[0b00010000, 0x7F]),
+            (128, &[0b00010000, 0x80, 0x01]),
+            (16_383, &[0b00010000, 0xFF, 0x7F]),
+            (16_384, &[0b00010000, 0x80, 0x80, 0x01]),
+            (2_097_151, &[0b00010000, 0xFF, 0xFF, 0x7F]),
+            (2_097_152, &[0b00010000, 0x80, 0x80, 0x80, 0x01]),
+            (268_435_455, &[0b00010000, 0xFF, 0xFF, 0xFF, 0x7F]),
         ];
 
-        for (exp, input) in data {
-            let res = remaining_length_to_u32(input);
+        for (exp, bytes) in data {
+            let (fixed, rest) = FixedHeader::parse(bytes).unwrap();
 
-            assert_eq!(res, exp);
+            assert!(rest.is_empty());
+
+            assert_eq!(*fixed.remaining_length, *exp);
         }
     }
 }
