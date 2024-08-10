@@ -1,6 +1,6 @@
 //! Data representation of MQTT packets
 
-use core::{fmt::Display, mem, ops::Deref};
+use core::{fmt::Display, mem, num::NonZeroU16, ops::Deref};
 
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -23,6 +23,7 @@ pub enum DecodeError {
     },
     PacketType(u8),
     MaxRemainingLength(u32),
+    PacketIdentifier,
 }
 
 impl Display for DecodeError {
@@ -50,6 +51,9 @@ impl Display for DecodeError {
                     "remaining length {value} is bigger than the maximum {}",
                     RemainingLength::MAX
                 )
+            }
+            DecodeError::PacketIdentifier => {
+                write!(f, "the packet identifier needs to be non-zero")
             }
         }
     }
@@ -355,6 +359,27 @@ impl TryFrom<u32> for RemainingLength {
 
 impl Deref for RemainingLength {
     type Target = u32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PacketIdentifier(NonZeroU16);
+
+impl PacketIdentifier {
+    pub fn parse(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (pkid, rest) = read_u16(bytes)?;
+
+        let pkid = NonZeroU16::new(pkid).ok_or(DecodeError::PacketIdentifier)?;
+
+        Ok((Self(pkid), rest))
+    }
+}
+
+impl Deref for PacketIdentifier {
+    type Target = NonZeroU16;
 
     fn deref(&self) -> &Self::Target {
         &self.0
