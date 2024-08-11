@@ -2,101 +2,13 @@
 
 use core::{fmt::Display, num::NonZeroU16, ops::Deref};
 
-#[cfg(feature = "std")]
-use std::error::Error;
-
 use bitflags::bitflags;
 
 use crate::bytes::{read_chunk, read_exact, read_u16, read_u8};
 
-#[derive(Debug)]
-pub enum DecodeError {
-    NotEnoughBytes {
-        needed: usize,
-        actual: usize,
-    },
-    FrameTooBig {
-        max: usize,
-    },
-    Utf8,
-    RemainingLengthBytes,
-    ControlFlags {
-        packet_type: ControlPacketType,
-        flags: TypeFlags,
-    },
-    PacketType(u8),
-    MaxRemainingLength(u32),
-    PacketIdentifier,
-}
+use super::{Decode, DecodeError};
 
-impl Display for DecodeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            DecodeError::NotEnoughBytes { needed, actual } => {
-                write!(
-                    f,
-                    "not enough bytes, buffer contains {actual} and {needed} more are needed"
-                )
-            }
-            DecodeError::FrameTooBig { max } => write!(
-                f,
-                "packet requires a length that exceeds the maximum of {max} bytes"
-            ),
-            DecodeError::Utf8 => write!(f, "the string was not UTF-8 encoded"),
-            DecodeError::RemainingLengthBytes => {
-                write!(f, "remaining length exceeded the maximum of 4 bytes")
-            }
-            DecodeError::ControlFlags { packet_type, flags } => {
-                write!(f, "invalid control packet flags {flags} for {packet_type}")
-            }
-            DecodeError::PacketType(packet_type) => {
-                write!(f, "invalid control packet type {packet_type}")
-            }
-            DecodeError::MaxRemainingLength(value) => {
-                write!(
-                    f,
-                    "remaining length {value} is bigger than the maximum {}",
-                    RemainingLength::MAX
-                )
-            }
-            DecodeError::PacketIdentifier => {
-                write!(f, "the packet identifier needs to be non-zero")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl Error for DecodeError {}
-
-pub enum FrameError {
-    NotEnoughBytes,
-    MaxBytes,
-}
-
-pub trait Decode<'a>: Sized {
-    /// Parses the bytes into a value.
-    ///
-    /// It returns the remaining bytes after the packet was parsed.
-    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError>;
-}
-
-/// Parses UTF-8 encoded string.
-///
-/// Text fields in the Control Packets described later are encoded as UTF-8 strings.
-///
-/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718016>
-pub fn parse_str(bytes: &[u8]) -> Result<(&str, &[u8]), DecodeError> {
-    let (length, rest) = read_u16(bytes)?;
-
-    let (data, rest) = read_exact(rest, length.into())?;
-
-    core::str::from_utf8(data)
-        .map(|s| (s, rest))
-        .map_err(|_| DecodeError::Utf8)
-}
-
-/// Parses UTF-8 encoded string.
+/// UTF-8 encoded string.
 ///
 /// Text fields in the Control Packets described later are encoded as UTF-8 strings.
 ///
@@ -156,7 +68,9 @@ fn is_valid_char(c: char) -> bool {
 fn is_last_two_supplementary(c: char) -> bool {
     let val = u32::from(c);
 
-    (val & 0xFE) != 0 && (val & 0xFF) != 0 && (0x01..=0x10).contains(&(val >> 16))
+    let last_bits = val & 0xFF;
+
+    (last_bits == 0xFE || last_bits == 0xFF) && (0x01..=0x10).contains(&(val >> 16))
 }
 
 pub const MAX_STR_BYTES: usize = 65_535;
@@ -504,11 +418,11 @@ mod tests {
         const EXAMPLE_STRING: &[u8] = &[0x00, 0x05, 0x41, 0xF0, 0xAA, 0x9B, 0x94];
         const EXPECTED: &str = "A𪛔";
 
-        let (str, rest) = parse_str(EXAMPLE_STRING).unwrap();
+        let (str, rest) = Str::parse(EXAMPLE_STRING).unwrap();
 
         assert!(rest.is_empty());
 
-        assert_eq!(str, EXPECTED);
+        assert_eq!(&*str, EXPECTED);
     }
 
     #[test]
