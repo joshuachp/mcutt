@@ -1,6 +1,6 @@
 //! Data representation of MQTT packets
 
-use core::{fmt::Display, mem, num::NonZeroU16, ops::Deref};
+use core::{fmt::Display, num::NonZeroU16, ops::Deref};
 
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -183,7 +183,9 @@ impl<'a> Decode<'a> for Str<'a> {
 
 /// Raw fixed header.
 ///
-/// This doesn't check the validity of the packet it self.
+/// This doesn't check the validity of the packet it self,.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718020>
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 struct RawFixedHeader<'a, const N: usize> {
@@ -238,7 +240,10 @@ impl<'a, const N: usize> RawFixedHeader<'a, N> {
     }
 }
 
-#[derive(Debug)]
+/// Fixed header containing the packet type, flags and remaining length of the payload.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718020>
+#[derive(Debug, Clone, Copy)]
 pub struct FixedHeader {
     packet_type: ControlPacketType,
     flags: TypeFlags,
@@ -256,34 +261,6 @@ impl FixedHeader {
 
     pub fn remaining_length(&self) -> RemainingLength {
         self.remaining_length
-    }
-
-    pub fn parse(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let mut c_flag = true;
-
-        // Count the bytes in the remaining length
-        let count = bytes
-            .iter()
-            .skip(1)
-            .take_while(|&b| {
-                // This stores the continue flag check for next iteration
-                mem::replace(&mut c_flag, CONTINUE_FLAG & *b != 0)
-            })
-            // Take 5 to check the that there are at most 4 bytes
-            .take(5)
-            .count();
-
-        match count {
-            0 => Err(DecodeError::NotEnoughBytes {
-                needed: 1,
-                actual: 0,
-            }),
-            1 => Self::parse_with_length::<1>(bytes),
-            2 => Self::parse_with_length::<2>(bytes),
-            3 => Self::parse_with_length::<3>(bytes),
-            4 => Self::parse_with_length::<4>(bytes),
-            _ => Err(DecodeError::RemainingLengthBytes),
-        }
     }
 
     fn parse_with_length<const N: usize>(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
@@ -306,6 +283,34 @@ impl FixedHeader {
             flags,
             remaining_length,
         })
+    }
+}
+
+impl<'a> Decode<'a> for FixedHeader {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        // count the continue flags
+        let n_continue = bytes
+            .iter()
+            .skip(1)
+            .take_while(|&b| CONTINUE_FLAG & *b != 0)
+            .take(4)
+            .count();
+
+        let actual_size = 1 + n_continue + 1;
+        if bytes.len() < actual_size {
+            return Err(DecodeError::NotEnoughBytes {
+                needed: actual_size,
+                actual: bytes.len(),
+            });
+        }
+
+        match n_continue {
+            0 => Self::parse_with_length::<1>(bytes),
+            1 => Self::parse_with_length::<2>(bytes),
+            2 => Self::parse_with_length::<3>(bytes),
+            3 => Self::parse_with_length::<4>(bytes),
+            _ => Err(DecodeError::RemainingLengthBytes),
+        }
     }
 }
 
@@ -591,5 +596,19 @@ mod tests {
         for c in iter.into_iter().flatten() {
             assert!(is_valid_char(c));
         }
+    }
+
+    #[test]
+    fn should_require_more_bytes_for_fixed_header() {
+        let bytes = &[0b00010000, 0x80];
+
+        let res = FixedHeader::parse(bytes).unwrap_err();
+        assert!(matches!(
+            res,
+            DecodeError::NotEnoughBytes {
+                needed: 3,
+                actual: 2
+            }
+        ))
     }
 }
