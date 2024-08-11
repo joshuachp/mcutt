@@ -15,6 +15,9 @@ pub enum DecodeError {
         needed: usize,
         actual: usize,
     },
+    FrameTooBig {
+        max: usize,
+    },
     Utf8,
     RemainingLengthBytes,
     ControlFlags {
@@ -32,9 +35,13 @@ impl Display for DecodeError {
             DecodeError::NotEnoughBytes { needed, actual } => {
                 write!(
                     f,
-                    "not enough bytes, buffer contains {actual} but {needed} were needed"
+                    "not enough bytes, buffer contains {actual} and {needed} more are needed"
                 )
             }
+            DecodeError::FrameTooBig { max } => write!(
+                f,
+                "packet requires a length that exceeds the maximum of {max} bytes"
+            ),
             DecodeError::Utf8 => write!(f, "the string was not UTF-8 encoded"),
             DecodeError::RemainingLengthBytes => {
                 write!(f, "remaining length exceeded the maximum of 4 bytes")
@@ -62,6 +69,18 @@ impl Display for DecodeError {
 #[cfg(feature = "std")]
 impl Error for DecodeError {}
 
+pub enum FrameError {
+    NotEnoughBytes,
+    MaxBytes,
+}
+
+pub trait Decode<'a>: Sized {
+    /// Parses the bytes into a value.
+    ///
+    /// It returns the remaining bytes after the packet was parsed.
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError>;
+}
+
 /// Parses UTF-8 encoded string.
 ///
 /// Text fields in the Control Packets described later are encoded as UTF-8 strings.
@@ -75,6 +94,91 @@ pub fn parse_str(bytes: &[u8]) -> Result<(&str, &[u8]), DecodeError> {
     core::str::from_utf8(data)
         .map(|s| (s, rest))
         .map_err(|_| DecodeError::Utf8)
+}
+
+/// Parses UTF-8 encoded string.
+///
+/// Text fields in the Control Packets described later are encoded as UTF-8 strings.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718016>
+#[derive(Debug, Clone, Copy)]
+pub struct Str<'a>(&'a str);
+
+impl<'a> TryFrom<&'a str> for Str<'a> {
+    type Error = DecodeError;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        value
+            .chars()
+            .all(is_valid_char)
+            .then_some(Str(value))
+            .ok_or(DecodeError::Utf8)
+    }
+}
+
+impl<'a> Deref for Str<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+/// Check if the UTF-8 character is valid for the MQTT string.
+///
+/// This will check for NULL, control and non characters.
+///
+/// See <https://www.unicode.org/faq/private_use.html#nonchar1> of a list of non characters. This
+/// set is formally immutable.
+fn is_valid_char(c: char) -> bool {
+    match c {
+        '\u{0000}'
+        | '\u{0001}'..='\u{001F}'
+        | '\u{FDD0}'..='\u{FDEF}'
+        | '\u{FFFE}'..='\u{FFFF}' => false,
+        _ => {
+            // Last two of the supplementary planes
+            if is_last_two_supplementary(c) {
+                return false;
+            }
+
+            true
+        }
+    }
+}
+
+/// The last two code points of each of the 16 supplementary planes.
+///
+// ```
+// U+1FFFE, U+1FFFF, U+2FFFE, U+2FFFF, ... U+10FFFE, U+10FFFF
+// ```
+#[inline]
+fn is_last_two_supplementary(c: char) -> bool {
+    let val = u32::from(c);
+
+    (val & 0xFE) != 0 && (val & 0xFF) != 0 && (0x01..=0x10).contains(&(val >> 16))
+}
+
+pub const MAX_STR_BYTES: usize = 65_535;
+
+impl<'a> Decode<'a> for Str<'a> {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        let (length, bytes) = read_u16(bytes)?;
+
+        let length = usize::from(length);
+
+        if length > MAX_STR_BYTES {
+            return Err(DecodeError::FrameTooBig { max: MAX_STR_BYTES });
+        }
+
+        let (data, bytes) = read_exact(bytes, length)?;
+
+        let data = core::str::from_utf8(data)
+            .map_err(|_| DecodeError::Utf8)
+            .and_then(Str::try_from)?;
+
+        Ok((data, bytes))
+    }
 }
 
 /// Raw fixed header.
@@ -432,6 +536,60 @@ mod tests {
             assert!(rest.is_empty());
 
             assert_eq!(*fixed.remaining_length, *exp);
+        }
+    }
+
+    #[test]
+    fn should_be_a_valid_char() {
+        let null = '\u{0000}';
+
+        let ranges = [
+            '\u{0001}'..='\u{001F}',
+            '\u{FDD0}'..='\u{FDEF}',
+            '\u{FFFE}'..='\u{FFFF}',
+        ];
+
+        let supplementary = [
+            '\u{1FFFE}',
+            '\u{1FFFF}',
+            '\u{2FFFE}',
+            '\u{2FFFF}',
+            '\u{3FFFE}',
+            '\u{3FFFF}',
+            '\u{4FFFE}',
+            '\u{4FFFF}',
+            '\u{5FFFE}',
+            '\u{5FFFF}',
+            '\u{6FFFE}',
+            '\u{6FFFF}',
+            '\u{7FFFE}',
+            '\u{7FFFF}',
+            '\u{8FFFE}',
+            '\u{8FFFF}',
+            '\u{9FFFE}',
+            '\u{9FFFF}',
+            '\u{10FFFE}',
+            '\u{10FFFF}',
+        ];
+
+        let iter = core::iter::once(null)
+            .chain(ranges.into_iter().flatten())
+            .chain(supplementary);
+
+        for c in iter {
+            assert!(
+                !is_valid_char(c),
+                "should not be valid {:08X}",
+                u32::from(c)
+            );
+        }
+    }
+
+    #[test]
+    fn alpha_numeric_should_be_valid() {
+        let iter = ['a'..='z', 'A'..='Z', '0'..='9'];
+        for c in iter.into_iter().flatten() {
+            assert!(is_valid_char(c));
         }
     }
 }
