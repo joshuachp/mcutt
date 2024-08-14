@@ -1,12 +1,45 @@
 //! Data representation of MQTT packets
 
-use core::{fmt::Display, num::NonZeroU16, ops::Deref};
+use core::{
+    fmt::Display,
+    mem,
+    num::{NonZeroU16, TryFromIntError},
+    ops::Deref,
+};
 
 use bitflags::bitflags;
 
-use crate::bytes::{read_chunk, read_exact, read_u16, read_u8};
+use crate::{
+    bytes::{read_chunk, read_exact, read_u16, read_u8},
+    v3::EncodeError,
+};
 
-use super::{Decode, DecodeError};
+use super::{Decode, DecodeError, Encode};
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum StrError {
+    MaxBytes { len: usize },
+    Utf8,
+}
+
+impl Display for StrError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            StrError::MaxBytes { len } => {
+                write!(
+                    f,
+                    "the string length {len} exceeds the maximum of {}",
+                    Str::MAX_BYTES
+                )
+            }
+            StrError::Utf8 => write!(f, "the string was not UTF-8 encoded"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for StrError {}
 
 /// UTF-8 encoded string.
 ///
@@ -16,15 +49,40 @@ use super::{Decode, DecodeError};
 #[derive(Debug, Clone, Copy)]
 pub struct Str<'a>(&'a str);
 
+impl<'a> Str<'a> {
+    /// Max number of bytes in a string
+    pub const MAX_BYTES: usize = u16::MAX as usize;
+
+    /// Returns and empty string.
+    pub const fn new() -> Self {
+        Self("")
+    }
+
+    pub const fn len_as_bytes(&self) -> usize {
+        self.0.as_bytes().len()
+    }
+}
+
+impl<'a> Default for Str<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> TryFrom<&'a str> for Str<'a> {
-    type Error = DecodeError;
+    type Error = StrError;
 
     fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        let len = value.as_bytes().len();
+        if len > Str::MAX_BYTES {
+            return Err(StrError::MaxBytes { len });
+        }
+
         value
             .chars()
             .all(is_valid_char)
             .then_some(Str(value))
-            .ok_or(DecodeError::Utf8)
+            .ok_or(StrError::Utf8)
     }
 }
 
@@ -33,6 +91,41 @@ impl<'a> Deref for Str<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.0
+    }
+}
+
+impl<'a> Encode for Str<'a> {
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        let len = u16::try_from(self.len_as_bytes()).map_err(|_| EncodeError::FrameTooBig {
+            max: Str::MAX_BYTES,
+        })?;
+
+        writer
+            .write_u16(len)
+            .and_then(|()| writer.write_all(self.as_bytes()))
+            .map_err(EncodeError::Write)?;
+
+        Ok(mem::size_of::<u16>() + self.len_as_bytes())
+    }
+}
+
+impl<'a> Decode<'a> for Str<'a> {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        let (length, bytes) = read_u16(bytes)?;
+
+        let length = usize::from(length);
+
+        // We don't check the size since we know it was a u16
+        let (data, bytes) = read_exact(bytes, length)?;
+
+        let data = core::str::from_utf8(data)
+            .map_err(|_| StrError::Utf8)
+            .and_then(Str::try_from)?;
+
+        Ok((data, bytes))
     }
 }
 
@@ -73,25 +166,77 @@ fn is_last_two_supplementary(c: char) -> bool {
     (last_bits == 0xFE || last_bits == 0xFF) && (0x01..=0x10).contains(&(val >> 16))
 }
 
-pub const MAX_STR_BYTES: usize = 65_535;
+#[derive(Debug)]
+pub struct BytesBufError {
+    pub(crate) len: usize,
+}
 
-impl<'a> Decode<'a> for Str<'a> {
-    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
-        let (length, bytes) = read_u16(bytes)?;
+impl Display for BytesBufError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the string length {} exceeds the maximum of {}",
+            self.len,
+            BytesBuf::MAX
+        )
+    }
+}
 
-        let length = usize::from(length);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BytesBuf<'a>(&'a [u8]);
 
-        if length > MAX_STR_BYTES {
-            return Err(DecodeError::FrameTooBig { max: MAX_STR_BYTES });
+impl<'a> BytesBuf<'a> {
+    pub const MAX: usize = u16::MAX as usize;
+}
+
+impl<'a> Deref for BytesBuf<'a> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for BytesBuf<'a> {
+    type Error = BytesBufError;
+
+    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+        if value.len() > BytesBuf::MAX {
+            return Err(BytesBufError { len: value.len() });
         }
 
-        let (data, bytes) = read_exact(bytes, length)?;
+        Ok(Self(value))
+    }
+}
 
-        let data = core::str::from_utf8(data)
-            .map_err(|_| DecodeError::Utf8)
-            .and_then(Str::try_from)?;
+impl<'a> Decode<'a> for BytesBuf<'a> {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        let (len, bytes) = read_u16(bytes)?;
 
-        Ok((data, bytes))
+        let len = usize::from(len);
+
+        // We don't check the size since we know it was a u16
+        let (buf, bytes) = read_exact(bytes, len)?;
+
+        Ok((Self(buf), bytes))
+    }
+}
+
+impl<'a> Encode for BytesBuf<'a> {
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        let len = u16::try_from(self.len()).map_err(|_| EncodeError::FrameTooBig {
+            max: Str::MAX_BYTES,
+        })?;
+
+        writer
+            .write_u16(len)
+            .and_then(|()| writer.write_all(self))
+            .map_err(EncodeError::Write)?;
+
+        Ok(mem::size_of::<u16>() + self.len())
     }
 }
 
@@ -101,14 +246,10 @@ impl<'a> Decode<'a> for Str<'a> {
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718020>
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
-struct RawFixedHeader<'a, const N: usize> {
+pub(super) struct RawFixedHeader<'a, const N: usize> {
     type_flags: u8,
     remaining_length: &'a [u8; N],
 }
-
-const CONTINUE_FLAG: u8 = 0b10000000;
-const VALUE_MASK: u8 = !CONTINUE_FLAG;
 
 impl<'a, const N: usize> RawFixedHeader<'a, N> {
     const _CHECK: () = assert!(N <= 4);
@@ -139,7 +280,7 @@ impl<'a, const N: usize> RawFixedHeader<'a, N> {
         self.remaining_length
             .iter()
             .map(|b| {
-                let value = u32::from(b & VALUE_MASK);
+                let value = u32::from(b & RemainingLength::VALUE_MASK);
                 let value = value * multiplier;
 
                 multiplier *= 128;
@@ -154,6 +295,20 @@ impl<'a, const N: usize> RawFixedHeader<'a, N> {
     }
 }
 
+impl<'a, const N: usize> Encode for RawFixedHeader<'a, N> {
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        writer
+            .write_u8(self.type_flags)
+            .and_then(|()| writer.write_all(self.remaining_length))
+            .map_err(EncodeError::Write)?;
+
+        Ok(1 + N)
+    }
+}
+
 /// Fixed header containing the packet type, flags and remaining length of the payload.
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718020>
@@ -165,6 +320,18 @@ pub struct FixedHeader {
 }
 
 impl FixedHeader {
+    pub fn new(
+        packet_type: ControlPacketType,
+        flags: TypeFlags,
+        remaining_length: RemainingLength,
+    ) -> Self {
+        Self {
+            packet_type,
+            flags,
+            remaining_length,
+        }
+    }
+
     pub fn packet_type(&self) -> &ControlPacketType {
         &self.packet_type
     }
@@ -198,6 +365,21 @@ impl FixedHeader {
             remaining_length,
         })
     }
+
+    /// Internal conversion since we already checked the length of remaining packets
+    fn as_raw<'a, const N: usize>(
+        &'a self,
+        remaining_length: &'a mut [u8; N],
+    ) -> RawFixedHeader<N> {
+        let type_flags = u8::from(self.packet_type) << 4 | self.flags.bits();
+
+        self.remaining_length.write(remaining_length);
+
+        RawFixedHeader {
+            type_flags,
+            remaining_length,
+        }
+    }
 }
 
 impl<'a> Decode<'a> for FixedHeader {
@@ -206,7 +388,7 @@ impl<'a> Decode<'a> for FixedHeader {
         let n_continue = bytes
             .iter()
             .skip(1)
-            .take_while(|&b| CONTINUE_FLAG & *b != 0)
+            .take_while(|&b| RemainingLength::CONTINUE_FLAG & *b != 0)
             .take(4)
             .count();
 
@@ -224,6 +406,41 @@ impl<'a> Decode<'a> for FixedHeader {
             2 => Self::parse_with_length::<3>(bytes),
             3 => Self::parse_with_length::<4>(bytes),
             _ => Err(DecodeError::RemainingLengthBytes),
+        }
+    }
+}
+
+impl Encode for FixedHeader {
+    fn write<W>(&self, writer: &mut W) -> Result<usize, super::EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        match self.remaining_length.0 {
+            0..=127 => {
+                let mut buf = [0u8; 1];
+                let raw = self.as_raw(&mut buf);
+
+                raw.write(writer)
+            }
+            128..=16_383 => {
+                let mut buf = [0u8; 2];
+                let raw = self.as_raw(&mut buf);
+
+                raw.write(writer)
+            }
+            16_384..=2_097_151 => {
+                let mut buf = [0u8; 3];
+                let raw = self.as_raw(&mut buf);
+
+                raw.write(writer)
+            }
+            2_097_152..=268_435_455 => {
+                let mut buf = [0u8; 4];
+                let raw = self.as_raw(&mut buf);
+
+                raw.write(writer)
+            }
+            _ => unreachable!("remaining length cannot exceed the max"),
         }
     }
 }
@@ -338,6 +555,12 @@ impl TryFrom<u8> for ControlPacketType {
     }
 }
 
+impl From<ControlPacketType> for u8 {
+    fn from(value: ControlPacketType) -> Self {
+        value as u8
+    }
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TypeFlags: u8 {
@@ -360,23 +583,103 @@ impl Display for TypeFlags {
     }
 }
 
+/// Error for an invalid [`RemainingLength`]
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RemainingLengthError {
+    /// The value is greater than the [`max`](RemainingLength::MAX)
+    Max {
+        /// The invalid value.
+        value: u32,
+    },
+    /// Checked integer conversion failed
+    TryFromInt(TryFromIntError),
+}
+
+impl Display for RemainingLengthError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RemainingLengthError::Max { value } => write!(
+                f,
+                "remaining length {value} is greater than the maximum {}",
+                RemainingLength::MAX
+            ),
+            RemainingLengthError::TryFromInt(..) => write!(f, "couldn't convert the value to u32"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for RemainingLengthError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RemainingLengthError::Max { .. } => None,
+            RemainingLengthError::TryFromInt(err) => Some(err),
+        }
+    }
+}
+
+impl From<TryFromIntError> for RemainingLengthError {
+    fn from(value: TryFromIntError) -> Self {
+        Self::TryFromInt(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RemainingLength(u32);
 
 impl RemainingLength {
+    const CONTINUE_FLAG: u8 = 0b10000000;
+    const VALUE_MASK: u8 = !Self::CONTINUE_FLAG;
     /// Maximum value of the remaining length
     pub const MAX: u32 = 268_435_455;
+
+    fn write<const N: usize>(&self, buf: &mut [u8; N]) {
+        let mut value = self.0;
+
+        let iter = core::iter::from_fn(|| {
+            // If the value is 0, no bytes should be written
+            if value == 0 {
+                return None;
+            }
+
+            // This will never fail
+            let mut encoded = u8::try_from(value.rem_euclid(128)).ok()?;
+
+            value = value.div_euclid(128);
+
+            if value > 0 {
+                encoded |= RemainingLength::CONTINUE_FLAG;
+            }
+
+            Some(encoded)
+        });
+
+        buf.iter_mut().zip(iter).for_each(|(b, v)| {
+            *b = v;
+        });
+    }
 }
 
 impl TryFrom<u32> for RemainingLength {
-    type Error = DecodeError;
+    type Error = RemainingLengthError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         if value > Self::MAX {
-            return Err(DecodeError::MaxRemainingLength(value));
+            return Err(RemainingLengthError::Max { value });
         }
 
         Ok(Self(value))
+    }
+}
+
+impl TryFrom<usize> for RemainingLength {
+    type Error = RemainingLengthError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        let value = u32::try_from(value)?;
+
+        RemainingLength::try_from(value)
     }
 }
 
@@ -455,6 +758,63 @@ mod tests {
             assert!(rest.is_empty());
 
             assert_eq!(*fixed.remaining_length, *exp);
+        }
+    }
+
+    #[test]
+    fn fixed_headers_as_raw() {
+        let type_flags = 0b00010000;
+        let data: &[(u32, &[u8])] = &[
+            (0, &[0x00]),
+            (127, &[0x7F]),
+            (128, &[0x80, 0x01]),
+            (16_383, &[0xFF, 0x7F]),
+            (16_384, &[0x80, 0x80, 0x01]),
+            (2_097_151, &[0xFF, 0xFF, 0x7F]),
+            (2_097_152, &[0x80, 0x80, 0x80, 0x01]),
+            (268_435_455, &[0xFF, 0xFF, 0xFF, 0x7F]),
+        ];
+
+        for (v, exp) in data {
+            let remaining_length = RemainingLength::try_from(*v).unwrap();
+            let fix = FixedHeader::new(
+                ControlPacketType::Connect,
+                TypeFlags::empty(),
+                remaining_length,
+            );
+
+            let mut buf = [0u8; 5];
+
+            let raw = fix.as_raw(&mut buf);
+
+            assert_eq!(raw.type_flags, type_flags);
+            assert_eq!(raw.remaining_length[exp.len()], 0);
+            assert_eq!(&raw.remaining_length[..exp.len()], *exp);
+        }
+    }
+
+    #[test]
+    fn should_encode_remaining_length() {
+        let data: &[(u32, &[u8])] = &[
+            (0, &[0x00]),
+            (127, &[0x7F]),
+            (128, &[0x80, 0x01]),
+            (16_383, &[0xFF, 0x7F]),
+            (16_384, &[0x80, 0x80, 0x01]),
+            (2_097_151, &[0xFF, 0xFF, 0x7F]),
+            (2_097_152, &[0x80, 0x80, 0x80, 0x01]),
+            (268_435_455, &[0xFF, 0xFF, 0xFF, 0x7F]),
+        ];
+
+        for (v, exp) in data {
+            let mut buf = [0u8; 5];
+
+            let r = RemainingLength::try_from(*v).unwrap();
+
+            r.write(&mut buf);
+
+            assert_eq!(buf[exp.len()], 0);
+            assert_eq!(&buf[..exp.len()], *exp);
         }
     }
 
