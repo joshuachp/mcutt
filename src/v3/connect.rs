@@ -1,21 +1,29 @@
 //! Connect and ConnAck packages.
 
-use core::{mem, num::TryFromIntError, ops::Deref, time::Duration};
+use core::{
+    fmt::{Debug, Display},
+    mem,
+    num::TryFromIntError,
+    ops::Deref,
+    time::Duration,
+};
 
 use bitflags::bitflags;
+
+use crate::bytes::read_u8;
 
 use super::{
     header::{
         BytesBuf, ControlPacketType, FixedHeader, RemainingLength, RemainingLengthError, Str,
         TypeFlags,
     },
-    Encode, EncodeError,
+    Decode, DecodeError, Encode, EncodeError,
 };
 
 /// First message sent by the Client to the Server.
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718028>
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Connect<'a> {
     flags: ConnectFlags,
     keep_alive: KeepAlive,
@@ -147,6 +155,19 @@ impl<'a> Connect<'a> {
     }
 }
 
+impl<'a> Debug for Connect<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Connect")
+            .field("flags", &self.flags)
+            .field("keep_alive", &self.keep_alive)
+            .field("client_id", &self.client_id)
+            .field("will", &self.will)
+            .field("username", &self.username)
+            .field("password", &self.password.map(|_| "..."))
+            .finish()
+    }
+}
+
 impl<'a> Encode for Connect<'a> {
     fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
@@ -273,6 +294,155 @@ pub enum WillQos {
     Qos0,
     Qos1,
     Qos2,
+}
+
+/// Is the server response to the [`Connect`] packet.
+///
+/// It's the first packet sent from the client.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnAck {
+    /// Session present on the server.
+    session_present: bool,
+    /// Return code value.
+    return_code: ConnectReturnCode,
+}
+
+impl ConnAck {
+    pub const REMAINING_LENGTH: u32 = 2;
+
+    pub fn session_present(&self) -> bool {
+        self.session_present
+    }
+
+    pub fn return_code(&self) -> ConnectReturnCode {
+        self.return_code
+    }
+}
+
+impl Display for ConnAck {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{} with session present {} and return code {}",
+            ControlPacketType::ConnAck,
+            self.session_present,
+            self.return_code
+        )
+    }
+}
+
+impl<'a> Decode<'a> for ConnAck {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        let (fixed_header, bytes) = FixedHeader::parse(bytes)?;
+
+        if fixed_header.packet_type() != ControlPacketType::ConnAck {
+            return Err(DecodeError::MismatchedPacketType {
+                expected: ControlPacketType::ConnAck,
+                actual: fixed_header.packet_type(),
+            });
+        }
+
+        if *fixed_header.remaining_length() != Self::REMAINING_LENGTH {
+            return Err(DecodeError::RemainingLength(
+                RemainingLengthError::InvalidLength {
+                    expected: Self::REMAINING_LENGTH,
+                    actual: *fixed_header.remaining_length(),
+                },
+            ));
+        }
+
+        let (flags, bytes) = read_u8(bytes)?;
+        let flags = ConnAckFlags::from_bits_retain(flags);
+
+        if !(flags & ConnAckFlags::MASK).is_empty() {
+            return Err(DecodeError::Reserved);
+        }
+
+        let session_present = flags.contains(ConnAckFlags::SESSION_PRESENT);
+
+        let (return_code, bytes) = read_u8(bytes)?;
+        let return_code = ConnectReturnCode::try_from(return_code)?;
+
+        Ok((
+            Self {
+                return_code,
+                session_present,
+            },
+            bytes,
+        ))
+    }
+}
+
+/// Connection return code in the [`ConnAck`] packet.
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum ConnectReturnCode {
+    /// Connection accepted.
+    Accepted = 0,
+    /// The Server does not support the level of the MQTT protocol requested by the client.
+    ProtocolVersion = 1,
+    /// The Client identifier is correct UTF-8 but not allowed by the Server.
+    IdentifierRejected = 2,
+    /// The Network Connection has been made but the MQTT service is unavailable.
+    ServerUnavailable = 3,
+    /// The data in the user name or password is malformed.
+    BadUsernamePassword = 4,
+    // The Client is not authorized to connect.
+    NotAuthorized = 5,
+}
+
+impl TryFrom<u8> for ConnectReturnCode {
+    type Error = DecodeError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        let code = match value {
+            0 => ConnectReturnCode::Accepted,
+            1 => ConnectReturnCode::ProtocolVersion,
+            2 => ConnectReturnCode::IdentifierRejected,
+            3 => ConnectReturnCode::ServerUnavailable,
+            4 => ConnectReturnCode::BadUsernamePassword,
+            5 => ConnectReturnCode::NotAuthorized,
+            6.. => return Err(DecodeError::Reserved),
+        };
+
+        Ok(code)
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct ConnAckFlags: u8 {
+        const MASK = 0b11111110;
+        const SESSION_PRESENT = 0b00000001;
+    }
+}
+
+impl ConnectReturnCode {
+    /// Returns `true` if the connect return code is [`Accepted`].
+    ///
+    /// [`Accepted`]: ConnectReturnCode::Accepted
+    #[must_use]
+    pub fn is_accepted(&self) -> bool {
+        matches!(self, Self::Accepted)
+    }
+}
+
+impl Display for ConnectReturnCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let code = *self as u8;
+        match self {
+            ConnectReturnCode::Accepted => write!(f, "connection accepted ({code})"),
+            ConnectReturnCode::ProtocolVersion => {
+                write!(f, "unacceptable protocol version ({code})")
+            }
+            ConnectReturnCode::IdentifierRejected => write!(f, "identifier rejected ({code})"),
+            ConnectReturnCode::ServerUnavailable => write!(f, "server unavailable ({code})"),
+            ConnectReturnCode::BadUsernamePassword => {
+                write!(f, "bad user name or password ({code})")
+            }
+            ConnectReturnCode::NotAuthorized => write!(f, "not authorized ({code})"),
+        }
+    }
 }
 
 #[cfg(test)]

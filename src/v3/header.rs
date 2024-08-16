@@ -332,8 +332,8 @@ impl FixedHeader {
         }
     }
 
-    pub fn packet_type(&self) -> &ControlPacketType {
-        &self.packet_type
+    pub fn packet_type(&self) -> ControlPacketType {
+        self.packet_type
     }
 
     pub fn flags(&self) -> &TypeFlags {
@@ -594,6 +594,8 @@ pub enum RemainingLengthError {
     },
     /// Checked integer conversion failed
     TryFromInt(TryFromIntError),
+    /// Invalid remaining length for the packet
+    InvalidLength { expected: u32, actual: u32 },
 }
 
 impl Display for RemainingLengthError {
@@ -605,6 +607,9 @@ impl Display for RemainingLengthError {
                 RemainingLength::MAX
             ),
             RemainingLengthError::TryFromInt(..) => write!(f, "couldn't convert the value to u32"),
+            RemainingLengthError::InvalidLength { expected, actual } => {
+                write!(f, "packet has must have remaining length of {expected}, but received a length of {actual}")
+            }
         }
     }
 }
@@ -613,7 +618,7 @@ impl Display for RemainingLengthError {
 impl std::error::Error for RemainingLengthError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            RemainingLengthError::Max { .. } => None,
+            RemainingLengthError::Max { .. } | RemainingLengthError::InvalidLength { .. } => None,
             RemainingLengthError::TryFromInt(err) => Some(err),
         }
     }

@@ -1,27 +1,27 @@
-use std::{
-    error::Error,
-    io::{BufWriter, Read},
-    net::TcpStream,
-    time::Duration,
-};
+use std::{net::TcpStream, time::Duration};
 
 use mcutt::{
-    sync::TcpClient,
+    sync::TcpConnection,
     v3::{
         connect::{Connect, KeepAlive},
         header::Str,
     },
 };
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-type DynError = Box<dyn Error + Send + Sync + 'static>;
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
 
-fn main() -> Result<(), DynError> {
+    tracing_subscriber::registry()
+        .with(LevelFilter::DEBUG)
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()?;
+
     let connection = TcpStream::connect("127.0.0.1:1883")?;
     connection.set_read_timeout(Some(Duration::from_secs(10)))?;
 
-    let writer = BufWriter::new(&connection);
-
-    let mut client = TcpClient::new(writer);
+    let mut connection = TcpConnection::new(&connection);
 
     let keep_alive = KeepAlive::try_from(Duration::from_secs(10))?;
     let client_id = Str::try_from("mcutt-sync-client")?;
@@ -30,16 +30,9 @@ fn main() -> Result<(), DynError> {
 
     connect.clean_session();
 
-    client.connect(connect)?;
+    let connack = connection.connect(connect)?;
 
-    let mut buf = [0u8; 4];
-
-    (&connection).read_exact(buf.as_mut_slice())?;
-
-    println!("CONNACK:");
-    for b in buf {
-        println!("{b:08b}")
-    }
+    println!("{connack}");
 
     Ok(())
 }

@@ -28,6 +28,11 @@ pub enum DecodeError {
     PacketType(u8),
     RemainingLength(RemainingLengthError),
     PacketIdentifier,
+    MismatchedPacketType {
+        expected: ControlPacketType,
+        actual: ControlPacketType,
+    },
+    Reserved,
 }
 
 impl Display for DecodeError {
@@ -59,6 +64,13 @@ impl Display for DecodeError {
             DecodeError::PacketIdentifier => {
                 write!(f, "the packet identifier needs to be non-zero")
             }
+            DecodeError::MismatchedPacketType { expected, actual } => {
+                write!(
+                    f,
+                    "expected control packet {expected}, but received {actual}"
+                )
+            }
+            DecodeError::Reserved => write!(f, "invalid reserved bits were set in the packet"),
         }
     }
 }
@@ -72,7 +84,9 @@ impl Error for DecodeError {
             | DecodeError::RemainingLengthBytes
             | DecodeError::ControlFlags { .. }
             | DecodeError::PacketType(_)
-            | DecodeError::PacketIdentifier => None,
+            | DecodeError::PacketIdentifier
+            | DecodeError::MismatchedPacketType { .. }
+            | DecodeError::Reserved => None,
             DecodeError::Str(err) => Some(err),
             DecodeError::RemainingLength(err) => Some(err),
         }
@@ -158,15 +172,14 @@ pub trait Writer {
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err>;
 
     /// Writes a single byte.
-    fn write_u8(&mut self, value: u8) -> Result<(), Self::Err>;
+    fn write_u8(&mut self, value: u8) -> Result<(), Self::Err> {
+        self.write_all(&[value])
+    }
 
     /// Writes a u16 in big endian.
     fn write_u16(&mut self, value: u16) -> Result<(), Self::Err> {
         self.write_all(&value.to_be_bytes())
     }
-
-    /// Flush this output stream, ensuring that all intermediately buffered contents reach their destination.
-    fn flush(&mut self) -> Result<(), Self::Err>;
 }
 
 #[cfg(test)]
@@ -194,10 +207,6 @@ pub mod tests {
         fn write_u8(&mut self, value: u8) -> Result<(), Self::Err> {
             self.buf.push(value);
 
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), Self::Err> {
             Ok(())
         }
     }
