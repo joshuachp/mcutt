@@ -1,7 +1,7 @@
 use std::{net::TcpStream, time::Duration};
 
 use mcutt::{
-    sync::TcpConnection,
+    sync::Connection,
     v3::{
         connect::{Connect, KeepAlive},
         header::Str,
@@ -21,7 +21,7 @@ fn main() -> color_eyre::Result<()> {
     let connection = TcpStream::connect("127.0.0.1:1883")?;
     connection.set_read_timeout(Some(Duration::from_secs(10)))?;
 
-    let mut connection = TcpConnection::new(&connection);
+    let mut connection = Connection::new(&connection);
 
     let keep_alive = KeepAlive::try_from(Duration::from_secs(10))?;
     let client_id = Str::try_from("mcutt-sync-client")?;
@@ -30,7 +30,7 @@ fn main() -> color_eyre::Result<()> {
 
     connect.clean_session();
 
-    let connack = connection.connect(connect)?;
+    let connack = connection.connect(&connect)?;
 
     println!("{connack}");
 

@@ -1,3 +1,5 @@
+//! Sync client implementation using the standard library [`TcpStream`].
+
 use core::{fmt::Display, num::NonZeroUsize, panic};
 use std::{
     collections::TryReserveError,
@@ -5,22 +7,31 @@ use std::{
     net::TcpStream,
 };
 
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 
 use crate::v3::{
-    connect::{ConnAck, Connect},
+    connect::{ConnAck, Connect, ConnectReturnCode},
     DecodeError, DecodePacket, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
 };
 
+/// Error returned by the MQTT connection
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConnectError {
+    /// Error returned by the ConnAck.
+    Connect(ConnectReturnCode),
+    /// Couldn't encode or write an outgoing packet.
     Encode(EncodeError<io::Error>),
+    /// Couldn't read an incoming packet.
     Read(ReadError),
 }
 
 impl Display for ConnectError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            ConnectError::Connect(code) => {
+                write!(f, "connect failed with return code {code}")
+            }
             ConnectError::Encode(_) => write!(f, "couldn't encode the packet"),
             ConnectError::Read(_) => write!(f, "couldn't write to the connection"),
         }
@@ -30,6 +41,7 @@ impl Display for ConnectError {
 impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            ConnectError::Connect(_) => None,
             ConnectError::Encode(err) => Some(err),
             ConnectError::Read(err) => Some(err),
         }
@@ -48,17 +60,27 @@ impl From<EncodeError<io::Error>> for ConnectError {
     }
 }
 
+/// Couldn't read or decode an incoming packet.
 #[derive(Debug)]
 pub enum ReadError {
-    /// Disconnected gracefully
+    /// The connection was disconnected gracefully.
+    ///
+    /// This means we read 0 bytes from the [`TcpStream`].
     Disconnected,
-    /// Decode error
+    /// Couldn't decode the packet.
     Decode(DecodeError),
-    /// Io error
+    /// The underling [`Read`] operation failed.
     Read(io::Error),
     /// Non enough memory to read the packet.
-    OutOfMemory { max: NonZeroUsize, required: usize },
-    /// Couldn't allocate the memory for the buffer
+    OutOfMemory {
+        /// The configured maximum for the [`ReadBuffer`]
+        max: NonZeroUsize,
+        /// The required length of the packet.
+        required: usize,
+    },
+    /// Couldn't allocate the memory for the buffer.
+    ///
+    /// This error is returned by the [`Vec::try_reserve_exact`] call.
     Reserve(TryReserveError),
 }
 
@@ -105,19 +127,22 @@ impl From<DecodeError> for ReadError {
     }
 }
 
+/// The MQTT connection, for both reading  and writing.
 #[derive(Debug)]
-pub struct TcpConnection<'a> {
+pub struct Connection<'a> {
     reader: TcpReader<'a>,
     writer: BufWriter<&'a TcpStream>,
 }
 
-impl<'c> TcpConnection<'c> {
+impl<'c> Connection<'c> {
+    /// Creates a new connection from a socket.
     pub fn new(connection: &'c TcpStream) -> Self {
         let read_buffer = ReadBuffer::default();
 
         Self::with_read_buffer(connection, read_buffer)
     }
 
+    /// Specify a configurable [`ReadBuffer`] for the connection.
     pub fn with_read_buffer(connection: &'c TcpStream, read_buffer: ReadBuffer) -> Self {
         Self {
             reader: TcpReader::new(read_buffer, connection),
@@ -125,8 +150,9 @@ impl<'c> TcpConnection<'c> {
         }
     }
 
+    /// Sends a [`Connect`] packet and waits for the Server's [`ConnAck`].
     #[instrument(skip(self))]
-    pub fn connect(&mut self, connect: Connect) -> Result<ConnAck, ConnectError> {
+    pub fn connect(&mut self, connect: &Connect) -> Result<ConnAck, ConnectError> {
         debug!("sending the CONNECT packet");
         connect.write(&mut self.writer)?;
 
@@ -156,13 +182,18 @@ const fn const_non_zero(value: usize) -> NonZeroUsize {
 }
 
 impl ReadBuffer {
-    const DEFULAT_INITIAL: NonZeroUsize = const_non_zero(8 * 1024);
-    const DEFULAT_MAX_SIZE: NonZeroUsize = const_non_zero(MAX_PACKET_SIZE);
+    /// The default initial capacity of the buffer.
+    pub const DEFULAT_INITIAL: NonZeroUsize = const_non_zero(8 * 1024);
 
+    /// The default maximum size that the buffer will grow to.
+    pub const DEFULAT_MAX_SIZE: NonZeroUsize = const_non_zero(MAX_PACKET_SIZE);
+
+    /// Create a new buffer with the specified initial capacity.
     pub fn new(initial: NonZeroUsize) -> Self {
         Self::with_max(initial, Self::DEFULAT_MAX_SIZE)
     }
 
+    /// Create a new buffer with the specified initial capacity and maximum size.
     pub fn with_max(initial: NonZeroUsize, max_size: NonZeroUsize) -> Self {
         Self {
             buf: vec![0; initial.get()],
@@ -318,7 +349,15 @@ impl<'c> TcpReader<'c> {
             let needed = match self.buf.parse::<T>() {
                 Ok(val) => return Ok(val),
                 Err(DecodeError::NotEnoughBytes { needed, .. }) => needed,
-                Err(err) => return Err(ReadError::Decode(err)),
+                Err(err) => {
+                    if err.must_close() {
+                        if let Err(err) = self.stream.shutdown(std::net::Shutdown::Both) {
+                            error!(error = %err, "couldnt shutdown socket")
+                        }
+                    }
+
+                    return Err(ReadError::Decode(err));
+                }
             };
 
             self.buf.reserve(needed)?;

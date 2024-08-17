@@ -16,10 +16,16 @@ use crate::{
 
 use super::{Decode, DecodeError, Encode};
 
+/// Error returned by the MQTT [`Str`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StrError {
-    MaxBytes { len: usize },
+    /// The length of the string exceeds the maximum size
+    MaxBytes {
+        /// The length of the string.
+        len: usize,
+    },
+    /// The string is not UTF-8 encoded or contains invalid characters.
     Utf8,
 }
 
@@ -58,6 +64,7 @@ impl<'a> Str<'a> {
         Self("")
     }
 
+    /// The length of the string in bytes.
     pub const fn len_as_bytes(&self) -> usize {
         self.0.as_bytes().len()
     }
@@ -166,6 +173,7 @@ fn is_last_two_supplementary(c: char) -> bool {
     (last_bits == 0xFE || last_bits == 0xFF) && (0x01..=0x10).contains(&(val >> 16))
 }
 
+/// Error returned by the [`BytesBuf`].
 #[derive(Debug)]
 pub struct BytesBufError {
     pub(crate) len: usize,
@@ -182,10 +190,12 @@ impl Display for BytesBufError {
     }
 }
 
+/// A buffer of bytes for the MQTT packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BytesBuf<'a>(&'a [u8]);
 
 impl<'a> BytesBuf<'a> {
+    /// Maximum number of bytes in the buffer.
     pub const MAX: usize = u16::MAX as usize;
 }
 
@@ -320,7 +330,7 @@ pub struct FixedHeader {
 }
 
 impl FixedHeader {
-    pub fn new(
+    pub(crate) fn new(
         packet_type: ControlPacketType,
         flags: TypeFlags,
         remaining_length: RemainingLength,
@@ -332,15 +342,16 @@ impl FixedHeader {
         }
     }
 
-    pub fn packet_type(&self) -> ControlPacketType {
+    pub(crate) fn packet_type(&self) -> ControlPacketType {
         self.packet_type
     }
 
-    pub fn flags(&self) -> TypeFlags {
+    #[allow(unused)]
+    pub(crate) fn flags(&self) -> TypeFlags {
         self.flags
     }
 
-    pub fn remaining_length(&self) -> RemainingLength {
+    pub(crate) fn remaining_length(&self) -> RemainingLength {
         self.remaining_length
     }
 
@@ -437,27 +448,72 @@ impl Encode for FixedHeader {
     }
 }
 
+/// Control Packet Type for the [`FixedHeader`].
+///
+/// Represented as a 4-bit unsigned value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ControlPacketType {
+    /// Client request to connect to Server.
+    ///
+    /// Sent by Client to Server.
     Connect = 1,
+    /// Connect acknowledgment.
+    ///
+    /// Server to Client.
     ConnAck = 2,
+    /// Publish message.
+    ///
+    /// Sent by both Client and Server.
     Publish = 3,
+    //// Publish acknowledgment.
+    ///
+    /// Sent by both Client and Server.
     PubAck = 4,
+    /// Publish received (assured delivery part 1).
+    ///
+    /// Sent by both Client and Server.
     PubRec = 5,
+    /// Publish release (assured delivery part 2)
+    ///
+    /// Sent by both Client and Server.
     PubRel = 6,
+    /// Publish complete (assured delivery part 3).
+    ///
+    /// Sent by both Client and Server.
     PubComp = 7,
+    /// Client subscribe request.
+    ///
+    /// Sent by both Client and Server.
     Subscribe = 8,
+    /// Subscribe acknowledgment.
+    ///
+    /// Sent by both Client and Server.
     SubAck = 9,
+    /// Unsubscribe request.
+    ///
+    /// Sent by both Client and Server.
     Unsubscribe = 10,
+    /// Unsubscribe acknowledgment.
+    ///
+    /// Sent by both Client and Server.
     UnsubAck = 11,
+    /// PING request.
+    ///
+    /// Sent by Client to Server.
     PingReq = 12,
+    /// PING response.
+    ///
+    /// Sent by Server to Client.
     PingResp = 13,
+    /// Client is disconnecting.
+    ///
+    /// Sent by Client to Server.
     Disconnect = 14,
 }
 
 impl ControlPacketType {
-    pub fn read_flags(&self, flags: u8) -> Result<TypeFlags, DecodeError> {
+    pub(crate) fn read_flags(&self, flags: u8) -> Result<TypeFlags, DecodeError> {
         let flags = TypeFlags::from_bits_retain(flags & TypeFlags::MASK.bits());
 
         match self {
@@ -554,17 +610,26 @@ impl From<ControlPacketType> for u8 {
 }
 
 bitflags! {
+    /// Control Packet type flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TypeFlags: u8 {
+        /// Mask for the flag in the [`FixedHeader`].
         const MASK = 0b00001111;
 
+        /// Publish is duplicate.
         const PUBLISH_DUP = 0b1000;
+        /// Publish QoS first bit.
         const PUBLISH_QOS_1 = 0b0100;
+        /// Publish QoS second bit.
         const PUBLISH_QOS_2 = 0b0010;
+        /// Publish retain flag.
         const PUBLISH_RETAIN = 0b0001;
 
+        /// Reserved non zero flags for PUBREL
         const PUBREL = 0b0010;
+        /// Reserved non zero flags for SUBSCRIBE
         const SUBSCRIBE = 0b0010;
+        /// Reserved non zero flags for UNSUBSCRIBE
         const UNSUBSCRIBE = 0b0010;
     }
 }
@@ -575,7 +640,7 @@ impl Display for TypeFlags {
     }
 }
 
-/// Error for an invalid [`RemainingLength`]
+/// Error for an invalid [`RemainingLength`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RemainingLengthError {
@@ -587,7 +652,12 @@ pub enum RemainingLengthError {
     /// Checked integer conversion failed
     TryFromInt(TryFromIntError),
     /// Invalid remaining length for the packet
-    InvalidLength { expected: u32, actual: u32 },
+    InvalidLength {
+        /// The expected length.
+        expected: u32,
+        /// The actual length.
+        actual: u32,
+    },
 }
 
 impl Display for RemainingLengthError {
@@ -622,6 +692,10 @@ impl From<TryFromIntError> for RemainingLengthError {
     }
 }
 
+/// The Remaining Length is the number of bytes remaining within the current packet.
+///
+/// It includes the data in the variable header and the payload. The Remaining Length does not
+/// include the bytes used to encode the Remaining Length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RemainingLength(u32);
 
@@ -696,11 +770,12 @@ impl Deref for RemainingLength {
     }
 }
 
+/// Identifier for a Packet with QoS > 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PacketIdentifier(NonZeroU16);
 
-impl PacketIdentifier {
-    pub fn parse(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+impl<'a> Decode<'a> for PacketIdentifier {
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         let (pkid, rest) = read_u16(bytes)?;
 
         let pkid = NonZeroU16::new(pkid).ok_or(DecodeError::PacketIdentifier)?;

@@ -17,7 +17,7 @@ use super::{
         BytesBuf, ControlPacketType, FixedHeader, RemainingLength, RemainingLengthError, Str,
         TypeFlags,
     },
-    DecodeError, DecodePacket, Encode, EncodeError,
+    DecodeError, DecodePacket, Encode, EncodeError, QoS,
 };
 
 /// First message sent by the Client to the Server.
@@ -62,28 +62,31 @@ impl<'a> Connect<'a> {
         }
     }
 
+    /// Sets the clean session flag for the connection.
+    ///
+    /// It's used to control the lifetime of the session state in the broker. Calling this function
+    /// will set the clean session flag and session must be discarded for the broker.
     pub fn clean_session(&mut self) -> &mut Self {
         self.flags |= ConnectFlags::CLEAN_SESSION;
 
         self
     }
 
-    pub fn will(
-        &mut self,
-        topic: Str<'a>,
-        message: BytesBuf<'a>,
-        qos: WillQos,
-        retain: bool,
-    ) -> &mut Self {
-        self.will = Some(Will { topic, message });
+    /// Sets the will for the connection.
+    ///
+    /// If the client is disconnected for a network failure, the keep alive expires, protocol error, or the
+    /// connection is closed without a DISCONNECT packet. The Server will publish the will message
+    /// on the specified topic.
+    pub fn will(&mut self, message: Will<'a>, qos: QoS, retain: bool) -> &mut Self {
+        self.will = Some(message);
 
         self.flags |= ConnectFlags::WILL_FLAG;
 
         self.flags &= ConnectFlags::WILL_QOS_RESET;
         match qos {
-            WillQos::Qos0 => {}
-            WillQos::Qos1 => self.flags |= ConnectFlags::WILL_QOS_1,
-            WillQos::Qos2 => self.flags |= ConnectFlags::WILL_QOS_2,
+            QoS::AtMostOnce => {}
+            QoS::AtLeastOnce => self.flags |= ConnectFlags::WILL_QOS_1,
+            QoS::ExactlyOnce => self.flags |= ConnectFlags::WILL_QOS_2,
         };
 
         if retain {
@@ -93,6 +96,7 @@ impl<'a> Connect<'a> {
         self
     }
 
+    /// Username for to authenticate the connection.
     pub fn username(&mut self, username: Str<'a>) -> &mut Self {
         self.flags |= ConnectFlags::USERNAME;
 
@@ -101,6 +105,7 @@ impl<'a> Connect<'a> {
         self
     }
 
+    /// Username and password to authenticate the connection.
     pub fn username_password(&mut self, username: Str<'a>, password: BytesBuf<'a>) -> &mut Self {
         self.flags |= ConnectFlags::USERNAME | ConnectFlags::PASSWORD;
 
@@ -217,20 +222,27 @@ bitflags! {
     /// Connect packet flags for the variable header.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ConnectFlags: u8 {
-        const USERNAME = 0b10000000;
-        const PASSWORD = 0b01000000;
+        /// The username is present in the payload.
+        const USERNAME = 0b1000_0000;
+        /// The password is present in the payload.
+        const PASSWORD = 0b0100_0000;
 
-        const WILL_RETAIN = 0b00100000;
+        /// The Will is retained in the Server.
+        const WILL_RETAIN = 0b0010_0000;
 
-        const WILL_QOS_1 = 0b00001000;
-        const WILL_QOS_2 = 0b00010000;
+        /// The QoS first bit.
+        const WILL_QOS_1 = 0b0000_1000;
+        /// The QoS second bit.
+        const WILL_QOS_2 = 0b0001_0000;
 
         /// Inverse mask to resets the Will QOS flags.
-        const WILL_QOS_RESET = 0b11100111;
+        const WILL_QOS_RESET = 0b1110_0111;
 
-        const WILL_FLAG = 0b00000100;
+        /// The Will topic and message is present in the payload
+        const WILL_FLAG = 0b0000_0100;
 
-        const CLEAN_SESSION = 0b00000010;
+        /// The Clean Session flag is set for the connection.
+        const CLEAN_SESSION = 0b0000_0010;
     }
 }
 
@@ -242,6 +254,7 @@ bitflags! {
 pub struct KeepAlive(u16);
 
 impl KeepAlive {
+    /// Check if the keep alive is not `0`.
     pub fn is_enabled(&self) -> bool {
         self.0 != 0
     }
@@ -271,10 +284,18 @@ impl Deref for KeepAlive {
     }
 }
 
+/// Will message struct
 #[derive(Debug, Clone, Copy)]
 pub struct Will<'a> {
     topic: Str<'a>,
     message: BytesBuf<'a>,
+}
+
+impl<'a> Will<'a> {
+    /// Create a new will message with the specified topic and payload.
+    pub fn new(topic: Str<'a>, message: BytesBuf<'a>) -> Self {
+        Self { topic, message }
+    }
 }
 
 impl<'a> Encode for Will<'a> {
@@ -289,13 +310,6 @@ impl<'a> Encode for Will<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum WillQos {
-    Qos0,
-    Qos1,
-    Qos2,
-}
-
 /// Is the server response to the [`Connect`] packet.
 ///
 /// It's the first packet sent from the client.
@@ -308,12 +322,15 @@ pub struct ConnAck {
 }
 
 impl ConnAck {
+    /// The remaining length of the CONNACK.
     pub const REMAINING_LENGTH: u32 = 2;
 
+    /// Flag to indicate if the session is present on the Server.
     pub fn session_present(&self) -> bool {
         self.session_present
     }
 
+    /// The return code of the ConnAck
     pub fn return_code(&self) -> ConnectReturnCode {
         self.return_code
     }
@@ -376,34 +393,8 @@ pub enum ConnectReturnCode {
     ServerUnavailable = 3,
     /// The data in the user name or password is malformed.
     BadUsernamePassword = 4,
-    // The Client is not authorized to connect.
+    /// The Client is not authorized to connect.
     NotAuthorized = 5,
-}
-
-impl TryFrom<u8> for ConnectReturnCode {
-    type Error = DecodeError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        let code = match value {
-            0 => ConnectReturnCode::Accepted,
-            1 => ConnectReturnCode::ProtocolVersion,
-            2 => ConnectReturnCode::IdentifierRejected,
-            3 => ConnectReturnCode::ServerUnavailable,
-            4 => ConnectReturnCode::BadUsernamePassword,
-            5 => ConnectReturnCode::NotAuthorized,
-            6.. => return Err(DecodeError::Reserved),
-        };
-
-        Ok(code)
-    }
-}
-
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct ConnAckFlags: u8 {
-        const MASK = 0b11111110;
-        const SESSION_PRESENT = 0b00000001;
-    }
 }
 
 impl ConnectReturnCode {
@@ -434,6 +425,32 @@ impl Display for ConnectReturnCode {
     }
 }
 
+impl TryFrom<u8> for ConnectReturnCode {
+    type Error = DecodeError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        let code = match value {
+            0 => ConnectReturnCode::Accepted,
+            1 => ConnectReturnCode::ProtocolVersion,
+            2 => ConnectReturnCode::IdentifierRejected,
+            3 => ConnectReturnCode::ServerUnavailable,
+            4 => ConnectReturnCode::BadUsernamePassword,
+            5 => ConnectReturnCode::NotAuthorized,
+            6.. => return Err(DecodeError::Reserved),
+        };
+
+        Ok(code)
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    struct ConnAckFlags: u8 {
+        const MASK = 0b11111110;
+        const SESSION_PRESENT = 0b00000001;
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -458,14 +475,14 @@ mod tests {
             KeepAlive::try_from(Duration::from_secs(10)).unwrap(),
         );
 
+        let will = Will::new(
+            Str::try_from("/will").unwrap(),
+            BytesBuf::try_from(b"hello".as_slice()).unwrap(),
+        );
+
         connect
             .clean_session()
-            .will(
-                Str::try_from("/will").unwrap(),
-                BytesBuf::try_from(b"hello".as_slice()).unwrap(),
-                WillQos::Qos1,
-                true,
-            )
+            .will(will, QoS::AtLeastOnce, true)
             .username_password(
                 Str::try_from("username").unwrap(),
                 BytesBuf::try_from(b"passwd".as_slice()).unwrap(),
