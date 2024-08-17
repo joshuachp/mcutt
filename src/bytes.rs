@@ -15,10 +15,7 @@ pub(crate) fn read_u16(bytes: &[u8]) -> Result<(u16, &[u8]), DecodeError> {
 
 pub(crate) const fn read_exact(bytes: &[u8], length: usize) -> Result<(&[u8], &[u8]), DecodeError> {
     if length > bytes.len() {
-        return Err(DecodeError::NotEnoughBytes {
-            needed: length,
-            actual: bytes.len(),
-        });
+        return Err(DecodeError::not_enough(bytes, length));
     }
 
     Ok(bytes.split_at(length))
@@ -29,8 +26,5 @@ pub(crate) fn read_chunk<const N: usize>(bytes: &[u8]) -> Result<(&[u8; N], &[u8
 
     read.try_into()
         .map(|read| (read, rest))
-        .map_err(|_| DecodeError::NotEnoughBytes {
-            needed: N,
-            actual: bytes.len(),
-        })
+        .map_err(|_| DecodeError::not_enough(bytes, N))
 }

@@ -5,7 +5,9 @@ use core::fmt::Display;
 #[cfg(feature = "std")]
 use std::error::Error;
 
-use header::{ControlPacketType, RemainingLengthError, StrError, TypeFlags};
+use header::{ControlPacketType, FixedHeader, RemainingLengthError, StrError, TypeFlags};
+
+use crate::bytes::read_exact;
 
 pub mod connect;
 pub mod header;
@@ -23,7 +25,6 @@ pub const MAX_PACKET_SIZE: usize = 1 + 4 + 268_435_455;
 pub enum DecodeError {
     NotEnoughBytes {
         needed: usize,
-        actual: usize,
     },
     FrameTooBig {
         max: usize,
@@ -44,14 +45,21 @@ pub enum DecodeError {
     Reserved,
 }
 
+impl DecodeError {
+    pub(crate) const fn not_enough(bytes: &[u8], length: usize) -> Self {
+        debug_assert!(bytes.len() < length);
+
+        Self::NotEnoughBytes {
+            needed: length.saturating_sub(bytes.len()),
+        }
+    }
+}
+
 impl Display for DecodeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            DecodeError::NotEnoughBytes { needed, actual } => {
-                write!(
-                    f,
-                    "not enough bytes, buffer contains {actual} and {needed} more are needed"
-                )
+            DecodeError::NotEnoughBytes { needed } => {
+                write!(f, "not enough bytes, {needed} more are needed")
             }
             DecodeError::FrameTooBig { max } => write!(
                 f,
@@ -114,11 +122,69 @@ impl From<StrError> for DecodeError {
     }
 }
 
+/// Decode a MQTT value.
 pub trait Decode<'a>: Sized {
-    /// Parses the bytes into a value.
+    /// Parses the bytes into a packet.
     ///
-    /// It returns the remaining bytes after the packet was parsed.
+    /// It's a utility to parse a full packet from the given bytes and returns remaining unparsed
+    /// ones.
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError>;
+}
+
+pub trait DecodePacket<'a>: Sized {
+    /// Parses the bytes into a packet.
+    ///
+    /// It's a utility to parse a full packet from the given bytes and returns remaining unparsed
+    /// ones.
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        let (header, bytes) = FixedHeader::parse(bytes)?;
+
+        Self::check_header(&header)?;
+
+        let remaining_length = header.remaining_length().try_into()?;
+
+        let (bytes, rest) = read_exact(bytes, remaining_length)?;
+
+        let val = Self::parse_with_header(header, bytes)?;
+
+        Ok((val, rest))
+    }
+
+    /// Checks to perform on the [`FixedHeader`].
+    fn check_header(header: &FixedHeader) -> Result<(), DecodeError> {
+        let actual = header.packet_type();
+        let expected = Self::packet_type();
+        if actual != expected {
+            return Err(DecodeError::MismatchedPacketType { expected, actual });
+        }
+
+        let opt_fixed_len =
+            Self::fixed_remaining_length().filter(|len| *len != *header.remaining_length());
+        if let Some(expected) = opt_fixed_len {
+            return Err(DecodeError::RemainingLength(
+                RemainingLengthError::InvalidLength {
+                    expected,
+                    actual: *header.remaining_length(),
+                },
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Check if the remaining length is valid.
+    ///
+    /// For packets with a fixed length, this function can be overwritten to check it.
+    fn fixed_remaining_length() -> Option<u32> {
+        None
+    }
+
+    fn packet_type() -> ControlPacketType;
+
+    /// Parses the bytes into a packet from fixed header.
+    ///
+    /// It must consume all of the bytes in the message.
+    fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError>;
 }
 
 #[derive(Debug)]

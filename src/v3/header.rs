@@ -336,8 +336,8 @@ impl FixedHeader {
         self.packet_type
     }
 
-    pub fn flags(&self) -> &TypeFlags {
-        &self.flags
+    pub fn flags(&self) -> TypeFlags {
+        self.flags
     }
 
     pub fn remaining_length(&self) -> RemainingLength {
@@ -391,14 +391,6 @@ impl<'a> Decode<'a> for FixedHeader {
             .take_while(|&b| RemainingLength::CONTINUE_FLAG & *b != 0)
             .take(4)
             .count();
-
-        let actual_size = 1 + n_continue + 1;
-        if bytes.len() < actual_size {
-            return Err(DecodeError::NotEnoughBytes {
-                needed: actual_size,
-                actual: bytes.len(),
-            });
-        }
 
         match n_continue {
             0 => Self::parse_with_length::<1>(bytes),
@@ -688,6 +680,14 @@ impl TryFrom<usize> for RemainingLength {
     }
 }
 
+impl TryFrom<RemainingLength> for usize {
+    type Error = RemainingLengthError;
+
+    fn try_from(value: RemainingLength) -> Result<Self, Self::Error> {
+        usize::try_from(value.0).map_err(RemainingLengthError::TryFromInt)
+    }
+}
+
 impl Deref for RemainingLength {
     type Target = u32;
 
@@ -719,6 +719,10 @@ impl Deref for PacketIdentifier {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
+    use pretty_assertions::assert_eq;
+
     use super::*;
 
     #[test]
@@ -881,13 +885,12 @@ mod tests {
     fn should_require_more_bytes_for_fixed_header() {
         let bytes = &[0b00010000, 0x80];
 
-        let res = FixedHeader::parse(bytes).unwrap_err();
-        assert!(matches!(
-            res,
-            DecodeError::NotEnoughBytes {
-                needed: 3,
-                actual: 2
-            }
-        ))
+        let err = FixedHeader::parse(bytes).unwrap_err();
+
+        let DecodeError::NotEnoughBytes { needed } = err else {
+            panic!("wrong error {err:?}");
+        };
+
+        assert_eq!(needed, 1);
     }
 }

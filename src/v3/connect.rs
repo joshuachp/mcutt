@@ -17,7 +17,7 @@ use super::{
         BytesBuf, ControlPacketType, FixedHeader, RemainingLength, RemainingLengthError, Str,
         TypeFlags,
     },
-    Decode, DecodeError, Encode, EncodeError,
+    DecodeError, DecodePacket, Encode, EncodeError,
 };
 
 /// First message sent by the Client to the Server.
@@ -331,26 +331,16 @@ impl Display for ConnAck {
     }
 }
 
-impl<'a> Decode<'a> for ConnAck {
-    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
-        let (fixed_header, bytes) = FixedHeader::parse(bytes)?;
+impl<'a> DecodePacket<'a> for ConnAck {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::ConnAck
+    }
 
-        if fixed_header.packet_type() != ControlPacketType::ConnAck {
-            return Err(DecodeError::MismatchedPacketType {
-                expected: ControlPacketType::ConnAck,
-                actual: fixed_header.packet_type(),
-            });
-        }
+    fn fixed_remaining_length() -> Option<u32> {
+        Some(Self::REMAINING_LENGTH)
+    }
 
-        if *fixed_header.remaining_length() != Self::REMAINING_LENGTH {
-            return Err(DecodeError::RemainingLength(
-                RemainingLengthError::InvalidLength {
-                    expected: Self::REMAINING_LENGTH,
-                    actual: *fixed_header.remaining_length(),
-                },
-            ));
-        }
-
+    fn parse_with_header(_header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
         let (flags, bytes) = read_u8(bytes)?;
         let flags = ConnAckFlags::from_bits_retain(flags);
 
@@ -361,15 +351,14 @@ impl<'a> Decode<'a> for ConnAck {
         let session_present = flags.contains(ConnAckFlags::SESSION_PRESENT);
 
         let (return_code, bytes) = read_u8(bytes)?;
+        debug_assert!(bytes.is_empty());
+
         let return_code = ConnectReturnCode::try_from(return_code)?;
 
-        Ok((
-            Self {
-                return_code,
-                session_present,
-            },
-            bytes,
-        ))
+        Ok(Self {
+            return_code,
+            session_present,
+        })
     }
 }
 

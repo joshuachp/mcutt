@@ -9,7 +9,7 @@ use tracing::{debug, instrument};
 
 use crate::v3::{
     connect::{ConnAck, Connect},
-    Decode, DecodeError, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
+    DecodeError, DecodePacket, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
 };
 
 #[derive(Debug)]
@@ -205,7 +205,7 @@ impl ReadBuffer {
 
     fn parse<'a, T>(&'a mut self) -> Result<T, DecodeError>
     where
-        T: Decode<'a>,
+        T: DecodePacket<'a>,
     {
         match T::parse(&self.buf[self.data_start..self.data_end]) {
             Ok((val, bytes)) => {
@@ -306,7 +306,7 @@ impl<'c> TcpReader<'c> {
     /// more from the connection.
     fn recv<T>(&mut self) -> Result<T, ReadError>
     where
-        for<'a> T: Decode<'a>,
+        for<'a> T: DecodePacket<'a>,
     {
         if self.buf.is_empty() {
             self.buf.reset();
