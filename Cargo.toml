@@ -18,9 +18,10 @@ bitflags = "2.0.0"
 tracing = { version = "0.1.13", default-features = false, optional = true, features = ["attributes"] }
 
 [features]
-default = ["std"]
+default = ["sync"]
 alloc = ["dep:tracing"]
 std = ["alloc", "tracing/std"]
+sync = ["std"]
 
 [dev-dependencies]
 color-eyre = "0.6.3"
