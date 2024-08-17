@@ -10,7 +10,7 @@ use std::{
 use tracing::{debug, error, instrument};
 
 use crate::v3::{
-    connect::{ConnAck, Connect, ConnectReturnCode},
+    connect::{ConnAck, Connect, ReturnCode},
     DecodeError, DecodePacket, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
 };
 
@@ -18,8 +18,8 @@ use crate::v3::{
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ConnectError {
-    /// Error returned by the ConnAck.
-    Connect(ConnectReturnCode),
+    /// Error returned by the [`ConnAck`].
+    Connect(ReturnCode),
     /// Couldn't encode or write an outgoing packet.
     Encode(EncodeError<io::Error>),
     /// Couldn't read an incoming packet.
@@ -136,6 +136,7 @@ pub struct Connection<'a> {
 
 impl<'c> Connection<'c> {
     /// Creates a new connection from a socket.
+    #[must_use]
     pub fn new(connection: &'c TcpStream) -> Self {
         let read_buffer = ReadBuffer::default();
 
@@ -143,6 +144,7 @@ impl<'c> Connection<'c> {
     }
 
     /// Specify a configurable [`ReadBuffer`] for the connection.
+    #[must_use]
     pub fn with_read_buffer(connection: &'c TcpStream, read_buffer: ReadBuffer) -> Self {
         Self {
             reader: TcpReader::new(read_buffer, connection),
@@ -189,12 +191,14 @@ impl ReadBuffer {
     pub const DEFULAT_MAX_SIZE: NonZeroUsize = const_non_zero(MAX_PACKET_SIZE);
 
     /// Create a new buffer with the specified initial capacity.
+    #[must_use]
     pub fn new(initial: NonZeroUsize) -> Self {
-        Self::with_max(initial, Self::DEFULAT_MAX_SIZE)
+        Self::with_max_size(initial, Self::DEFULAT_MAX_SIZE)
     }
 
     /// Create a new buffer with the specified initial capacity and maximum size.
-    pub fn with_max(initial: NonZeroUsize, max_size: NonZeroUsize) -> Self {
+    #[must_use]
+    pub fn with_max_size(initial: NonZeroUsize, max_size: NonZeroUsize) -> Self {
         Self {
             buf: vec![0; initial.get()],
             data_start: 0,
@@ -231,7 +235,7 @@ impl ReadBuffer {
 
     /// Shifts the data to the start of the buffer, so there is more free space to fill at the end.
     fn compact(&mut self) {
-        self.buf.rotate_left(self.data_start)
+        self.buf.rotate_left(self.data_start);
     }
 
     fn parse<'a, T>(&'a mut self) -> Result<T, DecodeError>
@@ -352,7 +356,7 @@ impl<'c> TcpReader<'c> {
                 Err(err) => {
                     if err.must_close() {
                         if let Err(err) = self.stream.shutdown(std::net::Shutdown::Both) {
-                            error!(error = %err, "couldnt shutdown socket")
+                            error!(error = %err, "couldnt shutdown socket");
                         }
                     }
 

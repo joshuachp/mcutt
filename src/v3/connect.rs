@@ -1,4 +1,4 @@
-//! Connect and ConnAck packages.
+//! [`Connect`] and [`ConnAck`] packages.
 
 use core::{
     fmt::{Debug, Display},
@@ -45,6 +45,7 @@ impl<'a> Connect<'a> {
     /// Create a new packet with the given client identifier (`client_id`).
     //
     /// If the provided client identifier is empty, the [`clean session flag`](ConnectFlags::CLEAN_SESSION) will be set to true.
+    #[must_use]
     pub fn new(client_id: Str<'a>, keep_alive: KeepAlive) -> Self {
         let mut flags = ConnectFlags::empty();
 
@@ -115,9 +116,8 @@ impl<'a> Connect<'a> {
         self
     }
 
-    /// Add all the sizes together and return it in
-    /// we use a saturating add since the [`usize::MAX`] will return
-    /// an [``]
+    /// Add all the sizes together and return it in we use a saturating add since the [`usize::MAX`]
+    /// will return an [`RemainingLengthError`].
     fn remaining_length(&self) -> Result<RemainingLength, RemainingLengthError> {
         let variable_headers = Self::PROTOCOL_NAME
             .len()
@@ -255,6 +255,7 @@ pub struct KeepAlive(u16);
 
 impl KeepAlive {
     /// Check if the keep alive is not `0`.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.0 != 0
     }
@@ -293,6 +294,7 @@ pub struct Will<'a> {
 
 impl<'a> Will<'a> {
     /// Create a new will message with the specified topic and payload.
+    #[must_use]
     pub fn new(topic: Str<'a>, message: BytesBuf<'a>) -> Self {
         Self { topic, message }
     }
@@ -318,7 +320,7 @@ pub struct ConnAck {
     /// Session present on the server.
     session_present: bool,
     /// Return code value.
-    return_code: ConnectReturnCode,
+    return_code: ReturnCode,
 }
 
 impl ConnAck {
@@ -326,12 +328,14 @@ impl ConnAck {
     pub const REMAINING_LENGTH: u32 = 2;
 
     /// Flag to indicate if the session is present on the Server.
+    #[must_use]
     pub fn session_present(&self) -> bool {
         self.session_present
     }
 
-    /// The return code of the ConnAck
-    pub fn return_code(&self) -> ConnectReturnCode {
+    /// The return code of the CONNACK
+    #[must_use]
+    pub fn return_code(&self) -> ReturnCode {
         self.return_code
     }
 }
@@ -370,11 +374,11 @@ impl<'a> DecodePacket<'a> for ConnAck {
         let (return_code, bytes) = read_u8(bytes)?;
         debug_assert!(bytes.is_empty());
 
-        let return_code = ConnectReturnCode::try_from(return_code)?;
+        let return_code = ReturnCode::try_from(return_code)?;
 
         Ok(Self {
-            return_code,
             session_present,
+            return_code,
         })
     }
 }
@@ -382,7 +386,7 @@ impl<'a> DecodePacket<'a> for ConnAck {
 /// Connection return code in the [`ConnAck`] packet.
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
-pub enum ConnectReturnCode {
+pub enum ReturnCode {
     /// Connection accepted.
     Accepted = 0,
     /// The Server does not support the level of the MQTT protocol requested by the client.
@@ -397,45 +401,45 @@ pub enum ConnectReturnCode {
     NotAuthorized = 5,
 }
 
-impl ConnectReturnCode {
+impl ReturnCode {
     /// Returns `true` if the connect return code is [`Accepted`].
     ///
-    /// [`Accepted`]: ConnectReturnCode::Accepted
+    /// [`Accepted`]: ReturnCode::Accepted
     #[must_use]
     pub fn is_accepted(&self) -> bool {
         matches!(self, Self::Accepted)
     }
 }
 
-impl Display for ConnectReturnCode {
+impl Display for ReturnCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let code = *self as u8;
         match self {
-            ConnectReturnCode::Accepted => write!(f, "connection accepted ({code})"),
-            ConnectReturnCode::ProtocolVersion => {
+            ReturnCode::Accepted => write!(f, "connection accepted ({code})"),
+            ReturnCode::ProtocolVersion => {
                 write!(f, "unacceptable protocol version ({code})")
             }
-            ConnectReturnCode::IdentifierRejected => write!(f, "identifier rejected ({code})"),
-            ConnectReturnCode::ServerUnavailable => write!(f, "server unavailable ({code})"),
-            ConnectReturnCode::BadUsernamePassword => {
+            ReturnCode::IdentifierRejected => write!(f, "identifier rejected ({code})"),
+            ReturnCode::ServerUnavailable => write!(f, "server unavailable ({code})"),
+            ReturnCode::BadUsernamePassword => {
                 write!(f, "bad user name or password ({code})")
             }
-            ConnectReturnCode::NotAuthorized => write!(f, "not authorized ({code})"),
+            ReturnCode::NotAuthorized => write!(f, "not authorized ({code})"),
         }
     }
 }
 
-impl TryFrom<u8> for ConnectReturnCode {
+impl TryFrom<u8> for ReturnCode {
     type Error = DecodeError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         let code = match value {
-            0 => ConnectReturnCode::Accepted,
-            1 => ConnectReturnCode::ProtocolVersion,
-            2 => ConnectReturnCode::IdentifierRejected,
-            3 => ConnectReturnCode::ServerUnavailable,
-            4 => ConnectReturnCode::BadUsernamePassword,
-            5 => ConnectReturnCode::NotAuthorized,
+            0 => ReturnCode::Accepted,
+            1 => ReturnCode::ProtocolVersion,
+            2 => ReturnCode::IdentifierRejected,
+            3 => ReturnCode::ServerUnavailable,
+            4 => ReturnCode::BadUsernamePassword,
+            5 => ReturnCode::NotAuthorized,
             6.. => return Err(DecodeError::Reserved),
         };
 
@@ -446,8 +450,8 @@ impl TryFrom<u8> for ConnectReturnCode {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     struct ConnAckFlags: u8 {
-        const MASK = 0b11111110;
-        const SESSION_PRESENT = 0b00000001;
+        const MASK = 0b1111_1110;
+        const SESSION_PRESENT = 0b0000_0001;
     }
 }
 

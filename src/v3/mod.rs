@@ -15,9 +15,9 @@ pub mod header;
 /// The default maximum packet size permitted by the spec.
 ///
 /// This is the size of:
-/// - 1 byte for packet type and flags
-/// - 4 bytes for the max remaining length
-/// - 268_435_455 bytes for the maximum remaining length value
+/// - `1` byte for packet type and flags
+/// - `4` bytes for the max remaining length
+/// - `268_435_455` bytes for the maximum remaining length value
 // Safety: The constant is non zero
 pub const MAX_PACKET_SIZE: usize = 1 + 4 + 268_435_455;
 
@@ -211,6 +211,11 @@ pub trait Decode<'a>: Sized {
     ///
     /// It's a utility to parse a full packet from the given bytes and returns remaining unparsed
     /// ones.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if the decode failed because the data is invalid, ore more
+    /// bytes are needed to decode.
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError>;
 }
 
@@ -220,6 +225,11 @@ pub trait DecodePacket<'a>: Sized {
     ///
     /// It's a utility to parse a full packet from the given bytes and returns remaining unparsed
     /// ones.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if the decode failed because the data is invalid, ore more
+    /// bytes are needed to decode.
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         let (header, bytes) = FixedHeader::parse(bytes)?;
 
@@ -235,6 +245,13 @@ pub trait DecodePacket<'a>: Sized {
     }
 
     /// Checks to perform on the [`FixedHeader`].
+    ///
+    /// # Errors
+    ///
+    /// The header is invalid if:
+    ///
+    /// - The expected packet type is different from the received one.
+    /// - The packet expect a fixed remaining length and it's different from received one.
     fn check_header(header: &FixedHeader) -> Result<(), DecodeError> {
         let actual = header.packet_type();
         let expected = Self::packet_type();
@@ -259,6 +276,7 @@ pub trait DecodePacket<'a>: Sized {
     /// Check if the remaining length is valid.
     ///
     /// For packets with a fixed length, this function can be overwritten to check it.
+    #[must_use]
     fn fixed_remaining_length() -> Option<u32> {
         None
     }
@@ -269,6 +287,11 @@ pub trait DecodePacket<'a>: Sized {
     /// Parses the bytes into a packet from fixed header.
     ///
     /// It must consume all of the bytes in the message.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if the decode failed because the data is invalid or it didn't
+    /// consume all the bytes in the payload.
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError>;
 }
 
@@ -277,6 +300,10 @@ pub trait Encode {
     /// Parses the bytes into a value.
     ///
     /// It returns the remaining bytes after the packet was parsed.
+    ///
+    /// # Errors
+    ///
+    /// It will return error if the underling [`Writer`] operation failed or the encode failed.
     fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
         W: Writer;
@@ -290,14 +317,26 @@ pub trait Writer {
     type Err;
 
     /// Attempts to write an entire buffer into this writer.
+    ///
+    /// # Errors
+    ///
+    /// It will return error if the underling write failed.
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err>;
 
     /// Writes a single byte.
+    ///
+    /// # Errors
+    ///
+    /// It will return error if the underling write failed.
     fn write_u8(&mut self, value: u8) -> Result<(), Self::Err> {
         self.write_all(&[value])
     }
 
     /// Writes a u16 in big endian.
+    ///
+    /// # Errors
+    ///
+    /// It will return error if the underling write failed.
     fn write_u16(&mut self, value: u16) -> Result<(), Self::Err> {
         self.write_all(&value.to_be_bytes())
     }

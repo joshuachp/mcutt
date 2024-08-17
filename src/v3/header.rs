@@ -60,11 +60,13 @@ impl<'a> Str<'a> {
     pub const MAX_BYTES: usize = u16::MAX as usize;
 
     /// Returns and empty string.
+    #[must_use]
     pub const fn new() -> Self {
         Self("")
     }
 
     /// The length of the string in bytes.
+    #[must_use]
     pub const fn len_as_bytes(&self) -> usize {
         self.0.as_bytes().len()
     }
@@ -342,16 +344,16 @@ impl FixedHeader {
         }
     }
 
-    pub(crate) fn packet_type(&self) -> ControlPacketType {
+    pub(crate) fn packet_type(self) -> ControlPacketType {
         self.packet_type
     }
 
     #[allow(unused)]
-    pub(crate) fn flags(&self) -> TypeFlags {
+    pub(crate) fn flags(self) -> TypeFlags {
         self.flags
     }
 
-    pub(crate) fn remaining_length(&self) -> RemainingLength {
+    pub(crate) fn remaining_length(self) -> RemainingLength {
         self.remaining_length
     }
 
@@ -513,7 +515,7 @@ pub enum ControlPacketType {
 }
 
 impl ControlPacketType {
-    pub(crate) fn read_flags(&self, flags: u8) -> Result<TypeFlags, DecodeError> {
+    pub(crate) fn read_flags(self, flags: u8) -> Result<TypeFlags, DecodeError> {
         let flags = TypeFlags::from_bits_retain(flags & TypeFlags::MASK.bits());
 
         match self {
@@ -521,7 +523,7 @@ impl ControlPacketType {
             ControlPacketType::PubRel => {
                 if flags != TypeFlags::PUBREL {
                     return Err(DecodeError::ControlFlags {
-                        packet_type: *self,
+                        packet_type: self,
                         flags,
                     });
                 }
@@ -529,7 +531,7 @@ impl ControlPacketType {
             ControlPacketType::Subscribe => {
                 if flags != TypeFlags::SUBSCRIBE {
                     return Err(DecodeError::ControlFlags {
-                        packet_type: *self,
+                        packet_type: self,
                         flags,
                     });
                 }
@@ -537,7 +539,7 @@ impl ControlPacketType {
             ControlPacketType::Unsubscribe => {
                 if flags != TypeFlags::UNSUBSCRIBE {
                     return Err(DecodeError::ControlFlags {
-                        packet_type: *self,
+                        packet_type: self,
                         flags,
                     });
                 }
@@ -545,7 +547,7 @@ impl ControlPacketType {
             _ => {
                 if !flags.is_empty() {
                     return Err(DecodeError::ControlFlags {
-                        packet_type: *self,
+                        packet_type: self,
                         flags,
                     });
                 }
@@ -614,7 +616,7 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TypeFlags: u8 {
         /// Mask for the flag in the [`FixedHeader`].
-        const MASK = 0b00001111;
+        const MASK = 0b0000_1111;
 
         /// Publish is duplicate.
         const PUBLISH_DUP = 0b1000;
@@ -700,12 +702,12 @@ impl From<TryFromIntError> for RemainingLengthError {
 pub struct RemainingLength(u32);
 
 impl RemainingLength {
-    const CONTINUE_FLAG: u8 = 0b10000000;
+    const CONTINUE_FLAG: u8 = 0b1000_0000;
     const VALUE_MASK: u8 = !Self::CONTINUE_FLAG;
     /// Maximum value of the remaining length
     pub const MAX: u32 = 268_435_455;
 
-    fn write<const N: usize>(&self, buf: &mut [u8; N]) {
+    fn write<const N: usize>(self, buf: &mut [u8; N]) {
         let mut value = self.0;
 
         let iter = core::iter::from_fn(|| {
@@ -770,7 +772,7 @@ impl Deref for RemainingLength {
     }
 }
 
-/// Identifier for a Packet with QoS > 0.
+/// Identifier for a Packet with [`QoS`](super::QoS) > 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PacketIdentifier(NonZeroU16);
 
@@ -847,7 +849,7 @@ mod tests {
 
     #[test]
     fn fixed_headers_as_raw() {
-        let type_flags = 0b00010000;
+        let type_flags = 0b0001_0000;
         let data: &[(u32, &[u8])] = &[
             (0, &[0x00]),
             (127, &[0x7F]),
