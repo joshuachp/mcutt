@@ -1,5 +1,6 @@
-use core::fmt::Display;
+use core::{fmt::Display, num::NonZeroUsize, panic};
 use std::{
+    collections::TryReserveError,
     io::{self, BufWriter, Read, Write},
     net::TcpStream,
 };
@@ -8,7 +9,7 @@ use tracing::{debug, instrument};
 
 use crate::v3::{
     connect::{ConnAck, Connect},
-    Decode, DecodeError, Encode, EncodeError, Writer,
+    Decode, DecodeError, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
 };
 
 #[derive(Debug)]
@@ -55,6 +56,10 @@ pub enum ReadError {
     Decode(DecodeError),
     /// Io error
     Read(io::Error),
+    /// Non enough memory to read the packet.
+    OutOfMemory { max: NonZeroUsize, required: usize },
+    /// Couldn't allocate the memory for the buffer
+    Reserve(TryReserveError),
 }
 
 impl Display for ReadError {
@@ -63,6 +68,10 @@ impl Display for ReadError {
             ReadError::Disconnected => write!(f, "the connection was closed gracefully"),
             ReadError::Decode(_) => write!(f, "couldn't decode the packet"),
             ReadError::Read(_) => write!(f, "couldn't read from the connection"),
+            ReadError::OutOfMemory { max, required } => {
+                write!(f, "couldn't read the packet of {required} bytes since the maximum size of the buffer is {max}")
+            }
+            ReadError::Reserve(_) => write!(f, "couldn't allocate the memory for the read buffer"),
         }
     }
 }
@@ -70,10 +79,29 @@ impl Display for ReadError {
 impl std::error::Error for ReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ReadError::Disconnected => None,
+            ReadError::Disconnected | ReadError::OutOfMemory { .. } => None,
             ReadError::Decode(err) => Some(err),
             ReadError::Read(err) => Some(err),
+            ReadError::Reserve(err) => Some(err),
         }
+    }
+}
+
+impl From<TryReserveError> for ReadError {
+    fn from(value: TryReserveError) -> Self {
+        ReadError::Reserve(value)
+    }
+}
+
+impl From<io::Error> for ReadError {
+    fn from(value: io::Error) -> Self {
+        ReadError::Read(value)
+    }
+}
+
+impl From<DecodeError> for ReadError {
+    fn from(value: DecodeError) -> Self {
+        ReadError::Decode(value)
     }
 }
 
@@ -85,14 +113,14 @@ pub struct TcpConnection<'a> {
 
 impl<'c> TcpConnection<'c> {
     pub fn new(connection: &'c TcpStream) -> Self {
-        // Start with default capacity
-        let buf = vec![0; 1024];
+        let read_buffer = ReadBuffer::default();
 
+        Self::with_read_buffer(connection, read_buffer)
+    }
+
+    pub fn with_read_buffer(connection: &'c TcpStream, read_buffer: ReadBuffer) -> Self {
         Self {
-            reader: TcpReader {
-                buf: ReadBuffer::new(buf),
-                stream: connection,
-            },
+            reader: TcpReader::new(read_buffer, connection),
             writer: BufWriter::new(connection),
         }
     }
@@ -109,19 +137,38 @@ impl<'c> TcpConnection<'c> {
     }
 }
 
+/// Buffer to store the data from the [`TcpStream`].
 #[derive(Debug)]
-struct ReadBuffer {
+pub struct ReadBuffer {
     buf: Vec<u8>,
     data_start: usize,
     data_end: usize,
+    max_size: NonZeroUsize,
+}
+
+/// Const constructor for the [`NonZeroUsize`] without unsafe.
+const fn const_non_zero(value: usize) -> NonZeroUsize {
+    let Some(value) = NonZeroUsize::new(value) else {
+        panic!("BUG: non zero value passed const_non_zero");
+    };
+
+    value
 }
 
 impl ReadBuffer {
-    fn new(buf: Vec<u8>) -> Self {
+    const DEFULAT_INITIAL: NonZeroUsize = const_non_zero(8 * 1024);
+    const DEFULAT_MAX_SIZE: NonZeroUsize = const_non_zero(MAX_PACKET_SIZE);
+
+    pub fn new(initial: NonZeroUsize) -> Self {
+        Self::with_max(initial, Self::DEFULAT_MAX_SIZE)
+    }
+
+    pub fn with_max(initial: NonZeroUsize, max_size: NonZeroUsize) -> Self {
         Self {
-            buf,
+            buf: vec![0; initial.get()],
             data_start: 0,
             data_end: 0,
+            max_size,
         }
     }
 
@@ -176,16 +223,17 @@ impl ReadBuffer {
         self.buf.len().saturating_sub(self.data_end)
     }
 
-    fn reserve(&mut self, needed: usize) {
+    fn reserve(&mut self, needed: usize) -> Result<(), ReadError> {
         if self.writable_len() >= needed {
-            return;
+            return Ok(());
         }
 
+        // No-op if empty
         self.compact();
 
         let writable_len = self.writable_len();
         if writable_len >= needed {
-            return;
+            return Ok(());
         }
 
         // |--            len            --|
@@ -196,19 +244,34 @@ impl ReadBuffer {
             .len()
             .saturating_sub(needed.saturating_sub(writable_len));
 
+        if new_len > self.max_size.get() {
+            return Err(ReadError::OutOfMemory {
+                max: self.max_size,
+                required: new_len,
+            });
+        }
+
+        // Over allocate to prevent frequent resizing, but cap it at max. We already checked that
+        // the new length.
+        let additional = self
+            .buf
+            .capacity()
+            .saturating_mul(2)
+            .max(self.max_size.get())
+            .saturating_sub(self.buf.len());
+
+        self.buf.try_reserve_exact(additional)?;
+
         self.buf.resize(new_len, 0);
+        self.buf.resize(new_len, 0);
+
+        Ok(())
     }
 }
 
-impl From<io::Error> for ReadError {
-    fn from(value: io::Error) -> Self {
-        ReadError::Read(value)
-    }
-}
-
-impl From<DecodeError> for ReadError {
-    fn from(value: DecodeError) -> Self {
-        ReadError::Decode(value)
+impl Default for ReadBuffer {
+    fn default() -> Self {
+        ReadBuffer::new(Self::DEFULAT_INITIAL)
     }
 }
 
@@ -219,6 +282,10 @@ struct TcpReader<'a> {
 }
 
 impl<'c> TcpReader<'c> {
+    fn new(buf: ReadBuffer, stream: &'c TcpStream) -> Self {
+        Self { buf, stream }
+    }
+
     fn read(&mut self) -> Result<(), ReadError> {
         // We need to make sure there is free space in the buffer
         let read = self.stream.read(self.buf.writable())?;
@@ -232,24 +299,31 @@ impl<'c> TcpReader<'c> {
         Ok(())
     }
 
+    /// Parses the next packet.
+    ///
+    /// If the buffer is empty, reads from the connection. Otherwise tries to parse the data in the
+    /// buffer. If more bytes are needed, makes sure the capacity is reserved in the array and reads
+    /// more from the connection.
     fn recv<T>(&mut self) -> Result<T, ReadError>
     where
         for<'a> T: Decode<'a>,
     {
         if self.buf.is_empty() {
             self.buf.reset();
+
+            self.read()?;
         }
 
         loop {
-            self.read()?;
-
             let needed = match self.buf.parse::<T>() {
                 Ok(val) => return Ok(val),
                 Err(DecodeError::NotEnoughBytes { needed, .. }) => needed,
                 Err(err) => return Err(ReadError::Decode(err)),
             };
 
-            self.buf.reserve(needed);
+            self.buf.reserve(needed)?;
+
+            self.read()?;
         }
     }
 }

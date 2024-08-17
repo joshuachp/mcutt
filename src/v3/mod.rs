@@ -10,6 +10,15 @@ use header::{ControlPacketType, RemainingLengthError, StrError, TypeFlags};
 pub mod connect;
 pub mod header;
 
+/// The default maximum packet size permitted by the spec.
+///
+/// This is the size of:
+/// - 1 byte for packet type and flags
+/// - 4 bytes for the max remaining length
+/// - 268_435_455 bytes for the maximum remaining length value
+// Safety: The constant is non zero
+pub const MAX_PACKET_SIZE: usize = 1 + 4 + 268_435_455;
+
 #[derive(Debug)]
 pub enum DecodeError {
     NotEnoughBytes {
