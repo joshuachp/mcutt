@@ -7,11 +7,16 @@ use std::{
     net::TcpStream,
 };
 
-use tracing::{debug, error, instrument};
+use tracing::{error, instrument, trace};
 
-use crate::v3::{
-    connect::{ConnAck, Connect, ReturnCode},
-    DecodeError, DecodePacket, Encode, EncodeError, Writer, MAX_PACKET_SIZE,
+use crate::{
+    slab::{Entry, Slab},
+    v3::{
+        connect::{ConnAck, Connect, ReturnCode},
+        header::PacketId,
+        publish::{ClientPublishOwned, ClientPublishRef, Publish, PublishOwned, Qos},
+        DecodeError, DecodePacket, EncodeError, EncodePacket, Writer, MAX_PACKET_SIZE,
+    },
 };
 
 /// Error returned by the MQTT connection
@@ -22,8 +27,14 @@ pub enum ConnectError {
     Connect(ReturnCode),
     /// Couldn't encode or write an outgoing packet.
     Encode(EncodeError<io::Error>),
+    /// Couldn't decode the packet.
+    Decode(DecodeError),
     /// Couldn't read an incoming packet.
     Read(ReadError),
+    /// Couldn't find a packet id.
+    MissingPkid(PacketId),
+    /// Couldn't send packet, too many other outgoing
+    ToManyOutgoing,
 }
 
 impl Display for ConnectError {
@@ -33,7 +44,10 @@ impl Display for ConnectError {
                 write!(f, "connect failed with return code {code}")
             }
             ConnectError::Encode(_) => write!(f, "couldn't encode the packet"),
+            ConnectError::Decode(_) => write!(f, "couldn't decode the packet"),
             ConnectError::Read(_) => write!(f, "couldn't write to the connection"),
+            ConnectError::MissingPkid(id) => write!(f, "couldn't find packet identifier {id}"),
+            ConnectError::ToManyOutgoing => write!(f, "too many outgoing packets"),
         }
     }
 }
@@ -41,8 +55,11 @@ impl Display for ConnectError {
 impl std::error::Error for ConnectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ConnectError::Connect(_) => None,
+            ConnectError::Connect(_)
+            | ConnectError::ToManyOutgoing
+            | ConnectError::MissingPkid(_) => None,
             ConnectError::Encode(err) => Some(err),
+            ConnectError::Decode(err) => Some(err),
             ConnectError::Read(err) => Some(err),
         }
     }
@@ -57,6 +74,12 @@ impl From<ReadError> for ConnectError {
 impl From<EncodeError<io::Error>> for ConnectError {
     fn from(v: EncodeError<io::Error>) -> Self {
         Self::Encode(v)
+    }
+}
+
+impl From<DecodeError> for ConnectError {
+    fn from(v: DecodeError) -> Self {
+        Self::Decode(v)
     }
 }
 
@@ -132,6 +155,7 @@ impl From<DecodeError> for ReadError {
 pub struct Connection<'a> {
     reader: TcpReader<'a>,
     writer: BufWriter<&'a TcpStream>,
+    outgoing: Slab<Vec<Entry<PublishOwned>>>,
 }
 
 impl<'c> Connection<'c> {
@@ -149,19 +173,58 @@ impl<'c> Connection<'c> {
         Self {
             reader: TcpReader::new(read_buffer, connection),
             writer: BufWriter::new(connection),
+            outgoing: Slab::new(u16::MAX.into()),
         }
     }
 
     /// Sends a [`Connect`] packet and waits for the Server's [`ConnAck`].
     #[instrument(skip(self))]
     pub fn connect(&mut self, connect: &Connect) -> Result<ConnAck, ConnectError> {
-        debug!("sending the CONNECT packet");
+        trace!("sending the CONNECT packet");
         connect.write(&mut self.writer)?;
 
         self.writer.flush().map_err(EncodeError::Write)?;
 
-        debug!("waiting for the CONNACK");
+        trace!("waiting for the CONNACK");
         self.reader.recv().map_err(ConnectError::Read)
+    }
+
+    /// Sends a [`ClientPublishRef`] to the connection with QoS at most once (0).
+    #[instrument(skip(self))]
+    pub fn publish(&mut self, publish: ClientPublishRef) -> Result<(), ConnectError> {
+        let publish = Publish::from(publish);
+
+        publish.write(&mut self.writer)?;
+
+        Ok(())
+    }
+
+    /// Sends a PUBLISH to the connection with QoS > 0.
+    ///
+    /// It will return the [`PacketId`] of the publish.
+    #[instrument(skip(self))]
+    pub fn publish_with_qos(
+        &mut self,
+        publish: ClientPublishOwned,
+        qos: Qos,
+    ) -> Result<PacketId, ConnectError> {
+        let pkid = self
+            .outgoing
+            .try_insert(|idx| {
+                PacketId::try_from(idx.saturating_add(1))
+                    .map_err(DecodeError::PacketIdentifier)
+                    .map(|pkid| (PublishOwned::with_qos(pkid, publish, qos), pkid))
+            })?
+            .ok_or(ConnectError::ToManyOutgoing)?;
+
+        let publish = self
+            .outgoing
+            .get(usize::from(pkid).saturating_sub(1))
+            .ok_or(ConnectError::MissingPkid(pkid))?;
+
+        publish.write(&mut self.writer)?;
+
+        Ok(pkid)
     }
 }
 
@@ -374,7 +437,9 @@ impl<'c> TcpReader<'c> {
 impl<'a> Writer for BufWriter<&'a TcpStream> {
     type Err = io::Error;
 
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err> {
-        Write::write_all(self, buf)
+    fn write_slice(&mut self, buf: &[u8]) -> Result<usize, Self::Err> {
+        Write::write_all(self, buf)?;
+
+        Ok(buf.len())
     }
 }

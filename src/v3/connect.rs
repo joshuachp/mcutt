@@ -13,11 +13,8 @@ use bitflags::bitflags;
 use crate::bytes::read_u8;
 
 use super::{
-    header::{
-        BytesBuf, ControlPacketType, FixedHeader, RemainingLength, RemainingLengthError, Str,
-        TypeFlags,
-    },
-    DecodeError, DecodePacket, Encode, EncodeError, QoS,
+    header::{BytesBuf, ControlPacketType, FixedHeader, StrRef, TypeFlags},
+    DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
 };
 
 /// First message sent by the Client to the Server.
@@ -27,9 +24,9 @@ use super::{
 pub struct Connect<'a> {
     flags: ConnectFlags,
     keep_alive: KeepAlive,
-    client_id: Str<'a>,
+    client_id: StrRef<'a>,
     will: Option<Will<'a>>,
-    username: Option<Str<'a>>,
+    username: Option<StrRef<'a>>,
     password: Option<BytesBuf<'a>>,
 }
 
@@ -46,7 +43,7 @@ impl<'a> Connect<'a> {
     //
     /// If the provided client identifier is empty, the [`clean session flag`](ConnectFlags::CLEAN_SESSION) will be set to true.
     #[must_use]
-    pub fn new(client_id: Str<'a>, keep_alive: KeepAlive) -> Self {
+    pub fn new(client_id: StrRef<'a>, keep_alive: KeepAlive) -> Self {
         let mut flags = ConnectFlags::empty();
 
         if client_id.is_empty() {
@@ -78,16 +75,16 @@ impl<'a> Connect<'a> {
     /// If the client is disconnected for a network failure, the keep alive expires, protocol error, or the
     /// connection is closed without a DISCONNECT packet. The Server will publish the will message
     /// on the specified topic.
-    pub fn will(&mut self, message: Will<'a>, qos: QoS, retain: bool) -> &mut Self {
+    pub fn will(&mut self, message: Will<'a>, qos: WillQoS, retain: bool) -> &mut Self {
         self.will = Some(message);
 
         self.flags |= ConnectFlags::WILL_FLAG;
 
         self.flags &= ConnectFlags::WILL_QOS_RESET;
         match qos {
-            QoS::AtMostOnce => {}
-            QoS::AtLeastOnce => self.flags |= ConnectFlags::WILL_QOS_1,
-            QoS::ExactlyOnce => self.flags |= ConnectFlags::WILL_QOS_2,
+            WillQoS::AtMostOnce => {}
+            WillQoS::AtLeastOnce => self.flags |= ConnectFlags::WILL_QOS_1,
+            WillQoS::ExactlyOnce => self.flags |= ConnectFlags::WILL_QOS_2,
         };
 
         if retain {
@@ -98,7 +95,7 @@ impl<'a> Connect<'a> {
     }
 
     /// Username for to authenticate the connection.
-    pub fn username(&mut self, username: Str<'a>) -> &mut Self {
+    pub fn username(&mut self, username: StrRef<'a>) -> &mut Self {
         self.flags |= ConnectFlags::USERNAME;
 
         self.username = Some(username);
@@ -107,56 +104,13 @@ impl<'a> Connect<'a> {
     }
 
     /// Username and password to authenticate the connection.
-    pub fn username_password(&mut self, username: Str<'a>, password: BytesBuf<'a>) -> &mut Self {
+    pub fn username_password(&mut self, username: StrRef<'a>, password: BytesBuf<'a>) -> &mut Self {
         self.flags |= ConnectFlags::USERNAME | ConnectFlags::PASSWORD;
 
         self.username = Some(username);
         self.password = Some(password);
 
         self
-    }
-
-    /// Add all the sizes together and return it in we use a saturating add since the [`usize::MAX`]
-    /// will return an [`RemainingLengthError`].
-    fn remaining_length(&self) -> Result<RemainingLength, RemainingLengthError> {
-        let variable_headers = Self::PROTOCOL_NAME
-            .len()
-            .saturating_add(mem::size_of_val(&Self::PROTOCOL_LEVEL_V3_1_1))
-            .saturating_add(mem::size_of::<ConnectFlags>())
-            .saturating_add(mem::size_of::<KeepAlive>());
-
-        let mut payload = mem::size_of::<u16>().saturating_add(self.client_id.len_as_bytes());
-        if let Some(will) = self.will {
-            payload = payload
-                .saturating_add(mem::size_of::<u16>())
-                .saturating_add(will.topic.len_as_bytes())
-                .saturating_add(mem::size_of::<u16>())
-                .saturating_add(will.message.len());
-        }
-
-        if let Some(username) = self.username {
-            payload = payload
-                .saturating_add(mem::size_of::<u16>())
-                .saturating_add(username.len_as_bytes());
-        }
-
-        if let Some(password) = self.password {
-            payload = payload
-                .saturating_add(mem::size_of::<u16>())
-                .saturating_add(password.len());
-        }
-
-        RemainingLength::try_from(variable_headers.saturating_add(payload))
-    }
-
-    fn fixed_header(&self) -> Result<FixedHeader, RemainingLengthError> {
-        self.remaining_length().map(|remaining_length| {
-            FixedHeader::new(
-                ControlPacketType::Connect,
-                TypeFlags::empty(),
-                remaining_length,
-            )
-        })
     }
 }
 
@@ -173,48 +127,63 @@ impl<'a> Debug for Connect<'a> {
     }
 }
 
-impl<'a> Encode for Connect<'a> {
-    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
-    where
-        W: super::Writer,
-    {
-        let fixed_header = self.fixed_header()?;
+impl<'a> EncodePacket for Connect<'a> {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::Connect
+    }
 
-        let mut count = fixed_header
-            .write(writer)?
-            .saturating_add(Self::PROTOCOL_NAME.len())
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::empty()
+    }
+
+    fn remaining_len(&self) -> usize {
+        let variable_headers = Self::PROTOCOL_NAME
+            .len()
             .saturating_add(mem::size_of_val(&Self::PROTOCOL_LEVEL_V3_1_1))
             .saturating_add(mem::size_of::<ConnectFlags>())
             .saturating_add(mem::size_of::<KeepAlive>());
 
-        writer
-            .write_all(&Self::PROTOCOL_NAME)
-            .and_then(|()| writer.write_u8(Self::PROTOCOL_LEVEL_V3_1_1))
-            .and_then(|()| writer.write_u8(self.flags.bits()))
-            .and_then(|()| writer.write_u16(*self.keep_alive))
-            .map_err(EncodeError::Write)?;
-
-        count = count.saturating_add(self.client_id.write(writer)?);
-
+        let mut payload = self.client_id.encode_len();
         if let Some(will) = self.will {
-            let written = will.write(writer)?;
-
-            count = count.saturating_add(written);
+            payload = payload.saturating_add(will.encode_len());
         }
 
         if let Some(username) = self.username {
-            let written = username.write(writer)?;
-
-            count = count.saturating_add(written);
+            payload = payload.saturating_add(username.encode_len());
         }
 
         if let Some(password) = self.password {
-            let written = password.write(writer)?;
-
-            count = count.saturating_add(written);
+            payload = payload.saturating_add(password.encode_len());
         }
 
-        Ok(count)
+        variable_headers.saturating_add(payload)
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        let variable = writer
+            .write_slice(&Self::PROTOCOL_NAME)
+            .and_then(|n| Ok(n.saturating_add(writer.write_u8(Self::PROTOCOL_LEVEL_V3_1_1)?)))
+            .and_then(|n| Ok(n.saturating_add(writer.write_u8(self.flags.bits())?)))
+            .and_then(|n| Ok(n.saturating_add(writer.write_u16(*self.keep_alive)?)))
+            .map_err(EncodeError::Write)?;
+
+        let mut payload = self.client_id.write(writer)?;
+        if let Some(will) = self.will {
+            payload = payload.saturating_add(will.write(writer)?);
+        }
+
+        if let Some(username) = self.username {
+            payload = payload.saturating_add(username.write(writer)?);
+        }
+
+        if let Some(password) = self.password {
+            payload = payload.saturating_add(password.write(writer)?);
+        }
+
+        Ok(variable.saturating_add(payload))
     }
 }
 
@@ -288,19 +257,25 @@ impl Deref for KeepAlive {
 /// Will message struct
 #[derive(Debug, Clone, Copy)]
 pub struct Will<'a> {
-    topic: Str<'a>,
+    topic: StrRef<'a>,
     message: BytesBuf<'a>,
 }
 
 impl<'a> Will<'a> {
     /// Create a new will message with the specified topic and payload.
     #[must_use]
-    pub fn new(topic: Str<'a>, message: BytesBuf<'a>) -> Self {
+    pub fn new(topic: StrRef<'a>, message: BytesBuf<'a>) -> Self {
         Self { topic, message }
     }
 }
 
 impl<'a> Encode for Will<'a> {
+    fn encode_len(&self) -> usize {
+        self.topic
+            .encode_len()
+            .saturating_add(self.message.encode_len())
+    }
+
     fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
         W: super::Writer,
@@ -309,6 +284,27 @@ impl<'a> Encode for Will<'a> {
         let msg = self.message.write(writer)?;
 
         Ok(topic.saturating_add(msg))
+    }
+}
+
+/// Quality of service for a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WillQoS {
+    /// At most once delivery.
+    AtMostOnce,
+    /// At least once delivery.
+    AtLeastOnce,
+    /// Exactly once delivery.
+    ExactlyOnce,
+}
+
+impl Display for WillQoS {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            WillQoS::AtMostOnce => write!(f, "at most once delivery (0)"),
+            WillQoS::AtLeastOnce => write!(f, "at least once delivery (1)"),
+            WillQoS::ExactlyOnce => write!(f, "exactly once delivery (2)"),
+        }
     }
 }
 
@@ -458,13 +454,13 @@ bitflags! {
 #[cfg(test)]
 mod tests {
 
-    use crate::v3::tests::TestWriter;
+    use crate::v3::{header::Str, tests::TestWriter};
 
     use super::*;
 
     #[test]
     fn should_set_clean_session_on_empty() {
-        let client_id = Str::new();
+        let client_id = StrRef::new();
         let keep_alive = Duration::from_secs(30).try_into().unwrap();
 
         let conn = Connect::new(client_id, keep_alive);
@@ -486,7 +482,7 @@ mod tests {
 
         connect
             .clean_session()
-            .will(will, QoS::AtLeastOnce, true)
+            .will(will, WillQoS::AtLeastOnce, true)
             .username_password(
                 Str::try_from("username").unwrap(),
                 BytesBuf::try_from(b"passwd".as_slice()).unwrap(),

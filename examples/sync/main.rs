@@ -5,6 +5,7 @@ use mcutt::{
     v3::{
         connect::{Connect, KeepAlive},
         header::Str,
+        publish::{ClientPublish, Qos, Topic},
     },
 };
 use tracing::level_filters::LevelFilter;
@@ -33,6 +34,12 @@ fn main() -> color_eyre::Result<()> {
     let connack = connection.connect(&connect)?;
 
     println!("{connack}");
+
+    let publish = ClientPublish::new(Topic::try_from("/example")?, "Hello World!".as_bytes());
+
+    connection.publish(publish)?;
+
+    connection.publish_with_qos(publish.into(), Qos::ExactlyOnce)?;
 
     Ok(())
 }

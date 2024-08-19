@@ -5,12 +5,17 @@ use core::fmt::Display;
 #[cfg(feature = "std")]
 use std::error::Error;
 
-use header::{ControlPacketType, FixedHeader, RemainingLengthError, StrError, TypeFlags};
+use header::{
+    ControlPacketType, FixedHeader, PacketIdError, RemainingLength, RemainingLengthError, StrError,
+    TypeFlags,
+};
+use publish::TopicError;
 
 use crate::bytes::read_exact;
 
 pub mod connect;
 pub mod header;
+pub mod publish;
 
 /// The default maximum packet size permitted by the spec.
 ///
@@ -47,10 +52,10 @@ pub enum DecodeError {
     },
     /// Invalid or reserved packet type.
     PacketType(u8),
-    /// Couldn't decode the [`RemainingLength`](self::header::RemainingLength) field.
+    /// Couldn't decode the [`RemainingLength`] field.
     RemainingLength(RemainingLengthError),
-    /// Invalid [`PacketIdentifier`](self::header::PacketIdentifier).
-    PacketIdentifier,
+    /// Invalid [`PacketId`](self::header::PacketId).
+    PacketIdentifier(PacketIdError),
     /// Invalid packet type.
     ///
     /// This error is returned when the protocol expects a specific packet identifier.
@@ -62,6 +67,8 @@ pub enum DecodeError {
     },
     /// A reserved field was used.
     Reserved,
+    /// Couldn't decode the publish topic.
+    PublishTopic(TopicError),
 }
 
 impl DecodeError {
@@ -74,7 +81,7 @@ impl DecodeError {
     }
 
     /// Check if the error requires the connection to be closed.
-    pub(crate) fn must_close(&self) -> bool {
+    pub fn must_close(&self) -> bool {
         match self {
             DecodeError::NotEnoughBytes { .. } => false,
             DecodeError::FrameTooBig { .. }
@@ -83,9 +90,10 @@ impl DecodeError {
             | DecodeError::ControlFlags { .. }
             | DecodeError::PacketType(_)
             | DecodeError::RemainingLength(_)
-            | DecodeError::PacketIdentifier
+            | DecodeError::PacketIdentifier(_)
             | DecodeError::MismatchedPacketType { .. }
-            | DecodeError::Reserved => true,
+            | DecodeError::Reserved
+            | DecodeError::PublishTopic(_) => true,
         }
     }
 }
@@ -113,8 +121,8 @@ impl Display for DecodeError {
             DecodeError::RemainingLength(_) => {
                 write!(f, "invalid remaining length")
             }
-            DecodeError::PacketIdentifier => {
-                write!(f, "the packet identifier needs to be non-zero")
+            DecodeError::PacketIdentifier(_) => {
+                write!(f, "couldn't decode the packet identifier")
             }
             DecodeError::MismatchedPacketType { expected, actual } => {
                 write!(
@@ -123,6 +131,7 @@ impl Display for DecodeError {
                 )
             }
             DecodeError::Reserved => write!(f, "invalid reserved bits were set in the packet"),
+            DecodeError::PublishTopic(_) => write!(f, "couldn't decode the publish topic"),
         }
     }
 }
@@ -136,11 +145,12 @@ impl Error for DecodeError {
             | DecodeError::RemainingLengthBytes
             | DecodeError::ControlFlags { .. }
             | DecodeError::PacketType(_)
-            | DecodeError::PacketIdentifier
             | DecodeError::MismatchedPacketType { .. }
             | DecodeError::Reserved => None,
+            DecodeError::PacketIdentifier(err) => Some(err),
             DecodeError::Str(err) => Some(err),
             DecodeError::RemainingLength(err) => Some(err),
+            DecodeError::PublishTopic(err) => Some(err),
         }
     }
 }
@@ -157,13 +167,25 @@ impl From<StrError> for DecodeError {
     }
 }
 
+impl From<TopicError> for DecodeError {
+    fn from(value: TopicError) -> Self {
+        DecodeError::PublishTopic(value)
+    }
+}
+
+impl From<PacketIdError> for DecodeError {
+    fn from(value: PacketIdError) -> Self {
+        Self::PacketIdentifier(value)
+    }
+}
+
 /// Error returned while encoding a packet.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EncodeError<W> {
     /// Couldn't write to the underling [`Writer`].
     Write(W),
-    /// Couldn't encode the [`RemainingLength`](self::header::RemainingLength).
+    /// Couldn't encode the [`RemainingLength`].
     RemainingLength(RemainingLengthError),
     /// A field length exceeds the maximum value.
     FrameTooBig {
@@ -296,7 +318,61 @@ pub trait DecodePacket<'a>: Sized {
 }
 
 /// Encode a MQTT packet to be sent.
+pub trait EncodePacket {
+    /// Number of bytes that will be encoded in the Variable Header and Payload.
+    fn remaining_len(&self) -> usize;
+
+    /// Returns the [`FixedHeader`] control packet type.
+    fn packet_type() -> ControlPacketType;
+
+    /// Returns the [`FixedHeader`] packet flags.
+    fn packet_flags(&self) -> TypeFlags;
+
+    /// Returns the fixed headers for the packet.
+    fn fixed_header(&self) -> Result<FixedHeader, RemainingLengthError> {
+        RemainingLength::try_from(self.remaining_len()).map(|remaining_length| {
+            FixedHeader::new(Self::packet_type(), self.packet_flags(), remaining_length)
+        })
+    }
+
+    /// Writes the variable header and payload of the packet.
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: Writer;
+
+    /// Write the full packet.
+    ///
+    /// It will write into the [`Writer`] the fixed header, variable header and payload of the
+    /// packet.
+    ///
+    /// # Errors
+    ///
+    /// It will return error if the underling [`Writer`] operation failed or the encode failed.
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: Writer,
+    {
+        let fixed_header = self.fixed_header()?;
+
+        let fixed = fixed_header.write(writer)?;
+        debug_assert_eq!(fixed, fixed_header.encode_len());
+
+        let variable = self.write_packet(writer)?;
+        debug_assert_eq!(variable, self.remaining_len());
+
+        Ok(fixed.saturating_add(variable))
+    }
+}
+
+/// Encode a MQTT value.
 pub trait Encode {
+    /// Number of bytes that will be encoded.
+    ///
+    /// This is the number of bytes the value will take up when encoded in the final packet. It is
+    /// used to pre-allocate resources and calculating the remaining length of the payload before
+    /// encoding.
+    fn encode_len(&self) -> usize;
+
     /// Parses the bytes into a value.
     ///
     /// It returns the remaining bytes after the packet was parsed.
@@ -307,6 +383,22 @@ pub trait Encode {
     fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
         W: Writer;
+}
+
+/// Encode a raw buffer, without prefixing it with a length.
+impl Encode for &[u8] {
+    fn encode_len(&self) -> usize {
+        self.len()
+    }
+
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: Writer,
+    {
+        writer.write_slice(self).map_err(EncodeError::Write)?;
+
+        Ok(self.len())
+    }
 }
 
 /// Writer trait to be compatible with `no_std`.
@@ -321,15 +413,15 @@ pub trait Writer {
     /// # Errors
     ///
     /// It will return error if the underling write failed.
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err>;
+    fn write_slice(&mut self, buf: &[u8]) -> Result<usize, Self::Err>;
 
     /// Writes a single byte.
     ///
     /// # Errors
     ///
     /// It will return error if the underling write failed.
-    fn write_u8(&mut self, value: u8) -> Result<(), Self::Err> {
-        self.write_all(&[value])
+    fn write_u8(&mut self, value: u8) -> Result<usize, Self::Err> {
+        self.write_slice(&[value])
     }
 
     /// Writes a u16 in big endian.
@@ -337,20 +429,9 @@ pub trait Writer {
     /// # Errors
     ///
     /// It will return error if the underling write failed.
-    fn write_u16(&mut self, value: u16) -> Result<(), Self::Err> {
-        self.write_all(&value.to_be_bytes())
+    fn write_u16(&mut self, value: u16) -> Result<usize, Self::Err> {
+        self.write_slice(&value.to_be_bytes())
     }
-}
-
-/// Quality of service for a message.
-#[derive(Debug, Clone, Copy)]
-pub enum QoS {
-    /// At most once delivery.
-    AtMostOnce,
-    /// At least once delivery.
-    AtLeastOnce,
-    /// Exactly once delivery.
-    ExactlyOnce,
 }
 
 #[cfg(test)]
@@ -370,16 +451,10 @@ pub mod tests {
     impl Writer for TestWriter {
         type Err = ();
 
-        fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err> {
+        fn write_slice(&mut self, buf: &[u8]) -> Result<usize, Self::Err> {
             self.buf.extend(buf);
 
-            Ok(())
-        }
-
-        fn write_u8(&mut self, value: u8) -> Result<(), Self::Err> {
-            self.buf.push(value);
-
-            Ok(())
+            Ok(buf.len())
         }
     }
 }
