@@ -15,6 +15,7 @@ use crate::bytes::read_exact;
 
 pub mod connect;
 pub mod header;
+pub mod packet;
 pub mod publish;
 
 /// The default maximum packet size permitted by the spec.
@@ -69,6 +70,8 @@ pub enum DecodeError {
     Reserved,
     /// Couldn't decode the publish topic.
     PublishTopic(TopicError),
+    /// Not all bytes consumed in the packet
+    RemainingBytes,
 }
 
 impl DecodeError {
@@ -81,6 +84,7 @@ impl DecodeError {
     }
 
     /// Check if the error requires the connection to be closed.
+    #[must_use]
     pub fn must_close(&self) -> bool {
         match self {
             DecodeError::NotEnoughBytes { .. } => false,
@@ -93,7 +97,8 @@ impl DecodeError {
             | DecodeError::PacketIdentifier(_)
             | DecodeError::MismatchedPacketType { .. }
             | DecodeError::Reserved
-            | DecodeError::PublishTopic(_) => true,
+            | DecodeError::PublishTopic(_)
+            | DecodeError::RemainingBytes => true,
         }
     }
 }
@@ -132,6 +137,9 @@ impl Display for DecodeError {
             }
             DecodeError::Reserved => write!(f, "invalid reserved bits were set in the packet"),
             DecodeError::PublishTopic(_) => write!(f, "couldn't decode the publish topic"),
+            DecodeError::RemainingBytes => {
+                write!(f, "not all the bytes in the packet were consumed")
+            }
         }
     }
 }
@@ -146,7 +154,8 @@ impl Error for DecodeError {
             | DecodeError::ControlFlags { .. }
             | DecodeError::PacketType(_)
             | DecodeError::MismatchedPacketType { .. }
-            | DecodeError::Reserved => None,
+            | DecodeError::Reserved
+            | DecodeError::RemainingBytes => None,
             DecodeError::PacketIdentifier(err) => Some(err),
             DecodeError::Str(err) => Some(err),
             DecodeError::RemainingLength(err) => Some(err),
@@ -241,6 +250,15 @@ pub trait Decode<'a>: Sized {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError>;
 }
 
+impl<'a, T> Decode<'a> for T
+where
+    T: DecodePacket<'a>,
+{
+    fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
+        <T as DecodePacket>::parse(bytes)
+    }
+}
+
 /// Decode a MQTT packet that is received.
 pub trait DecodePacket<'a>: Sized {
     /// Parses the bytes into a packet.
@@ -282,11 +300,11 @@ pub trait DecodePacket<'a>: Sized {
         }
 
         let opt_fixed_len =
-            Self::fixed_remaining_length().filter(|len| *len != *header.remaining_length());
+            Self::fixed_remaining_length().filter(|len| *len != header.remaining_length());
         if let Some(expected) = opt_fixed_len {
             return Err(DecodeError::RemainingLength(
                 RemainingLengthError::InvalidLength {
-                    expected,
+                    expected: *expected,
                     actual: *header.remaining_length(),
                 },
             ));
@@ -299,7 +317,7 @@ pub trait DecodePacket<'a>: Sized {
     ///
     /// For packets with a fixed length, this function can be overwritten to check it.
     #[must_use]
-    fn fixed_remaining_length() -> Option<u32> {
+    fn fixed_remaining_length() -> Option<RemainingLength> {
         None
     }
 
@@ -329,6 +347,10 @@ pub trait EncodePacket {
     fn packet_flags(&self) -> TypeFlags;
 
     /// Returns the fixed headers for the packet.
+    ///
+    /// # Errors
+    ///
+    /// If the remaining length is invalid and cannot be encoded.
     fn fixed_header(&self) -> Result<FixedHeader, RemainingLengthError> {
         RemainingLength::try_from(self.remaining_len()).map(|remaining_length| {
             FixedHeader::new(Self::packet_type(), self.packet_flags(), remaining_length)
@@ -336,6 +358,11 @@ pub trait EncodePacket {
     }
 
     /// Writes the variable header and payload of the packet.
+    ///
+    /// # Errors
+    ///
+    /// If the underling write fails, the remaining length is incorrect or the frame is to big to
+    /// encode.
     fn write_packet<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
         W: Writer;

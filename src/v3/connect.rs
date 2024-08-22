@@ -13,7 +13,7 @@ use bitflags::bitflags;
 use crate::bytes::read_u8;
 
 use super::{
-    header::{BytesBuf, ControlPacketType, FixedHeader, StrRef, TypeFlags},
+    header::{BytesBuf, ControlPacketType, FixedHeader, RemainingLength, StrRef, TypeFlags},
     DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
 };
 
@@ -301,9 +301,9 @@ pub enum WillQoS {
 impl Display for WillQoS {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            WillQoS::AtMostOnce => write!(f, "at most once delivery (0)"),
-            WillQoS::AtLeastOnce => write!(f, "at least once delivery (1)"),
-            WillQoS::ExactlyOnce => write!(f, "exactly once delivery (2)"),
+            WillQoS::AtMostOnce => write!(f, "QoS (0)"),
+            WillQoS::AtLeastOnce => write!(f, "QoS (1)"),
+            WillQoS::ExactlyOnce => write!(f, "QoS (2)"),
         }
     }
 }
@@ -321,7 +321,7 @@ pub struct ConnAck {
 
 impl ConnAck {
     /// The remaining length of the CONNACK.
-    pub const REMAINING_LENGTH: u32 = 2;
+    pub const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
 
     /// Flag to indicate if the session is present on the Server.
     #[must_use]
@@ -353,7 +353,7 @@ impl<'a> DecodePacket<'a> for ConnAck {
         ControlPacketType::ConnAck
     }
 
-    fn fixed_remaining_length() -> Option<u32> {
+    fn fixed_remaining_length() -> Option<RemainingLength> {
         Some(Self::REMAINING_LENGTH)
     }
 
@@ -493,17 +493,72 @@ mod tests {
         let written = connect.write(&mut writer).unwrap();
 
         let expect = [
-            0b00010000, // head flags
-            53,         // remaining length
-            0, 4, b'M', b'Q', b'T', b'T',       // protocol name
-            4,          // Protocol level
-            0b11101110, // con flags
-            0, 10, // keep alive
-            0, 9, b'c', b'l', b'i', b'e', b'n', b't', b'_', b'i', b'd', // client id
-            0, 5, b'/', b'w', b'i', b'l', b'l', // will topic
-            0, 5, b'h', b'e', b'l', b'l', b'o', // will msg
-            0, 8, b'u', b's', b'e', b'r', b'n', b'a', b'm', b'e', // username
-            0, 6, b'p', b'a', b's', b's', b'w', b'd', // password
+            // head flags
+            0b0001_0000,
+            // remaining length
+            53,
+            // protocol name
+            0,
+            4,
+            b'M',
+            b'Q',
+            b'T',
+            b'T',
+            // Protocol level
+            4,
+            // con flags
+            0b1110_1110,
+            // keep alive
+            0,
+            10,
+            // client id
+            0,
+            9,
+            b'c',
+            b'l',
+            b'i',
+            b'e',
+            b'n',
+            b't',
+            b'_',
+            b'i',
+            b'd',
+            // will topic
+            0,
+            5,
+            b'/',
+            b'w',
+            b'i',
+            b'l',
+            b'l',
+            // will msg
+            0,
+            5,
+            b'h',
+            b'e',
+            b'l',
+            b'l',
+            b'o',
+            // username
+            0,
+            8,
+            b'u',
+            b's',
+            b'e',
+            b'r',
+            b'n',
+            b'a',
+            b'm',
+            b'e',
+            // password
+            0,
+            6,
+            b'p',
+            b'a',
+            b's',
+            b's',
+            b'w',
+            b'd',
         ];
 
         pretty_assertions::assert_eq!(written, expect.len());

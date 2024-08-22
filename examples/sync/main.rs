@@ -1,5 +1,6 @@
 use std::{net::TcpStream, time::Duration};
 
+use color_eyre::eyre::eyre;
 use mcutt::{
     sync::Connection,
     v3::{
@@ -39,7 +40,16 @@ fn main() -> color_eyre::Result<()> {
 
     connection.publish(publish)?;
 
-    connection.publish_with_qos(publish.into(), Qos::ExactlyOnce)?;
+    let id = connection.publish_with_qos(publish.into(), Qos::AtLeastOnce)?;
+
+    println!("PUBLISH pkid({id})");
+
+    let puback = connection
+        .revc()?
+        .try_into_pub_ack()
+        .map_err(|p| eyre!("expected PUBACK, got {p}"))?;
+
+    println!("{puback}");
 
     Ok(())
 }

@@ -7,15 +7,16 @@ use std::{
     net::TcpStream,
 };
 
-use tracing::{error, instrument, trace};
+use tracing::{instrument, trace};
 
 use crate::{
     slab::{Entry, Slab},
     v3::{
         connect::{ConnAck, Connect, ReturnCode},
-        header::PacketId,
+        header::{FixedHeader, PacketId},
+        packet::Packet,
         publish::{ClientPublishOwned, ClientPublishRef, Publish, PublishOwned, Qos},
-        DecodeError, DecodePacket, EncodeError, EncodePacket, Writer, MAX_PACKET_SIZE,
+        Decode, DecodeError, EncodeError, EncodePacket, Writer, MAX_PACKET_SIZE,
     },
 };
 
@@ -101,6 +102,8 @@ pub enum ReadError {
         /// The required length of the packet.
         required: usize,
     },
+    /// A CONNACK packet was expected
+    Connack,
     /// Couldn't allocate the memory for the buffer.
     ///
     /// This error is returned by the [`Vec::try_reserve_exact`] call.
@@ -116,6 +119,7 @@ impl Display for ReadError {
             ReadError::OutOfMemory { max, required } => {
                 write!(f, "couldn't read the packet of {required} bytes since the maximum size of the buffer is {max}")
             }
+            ReadError::Connack => write!(f, "a CONNACK packet was expencted"),
             ReadError::Reserve(_) => write!(f, "couldn't allocate the memory for the read buffer"),
         }
     }
@@ -124,7 +128,7 @@ impl Display for ReadError {
 impl std::error::Error for ReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ReadError::Disconnected | ReadError::OutOfMemory { .. } => None,
+            ReadError::Disconnected | ReadError::OutOfMemory { .. } | ReadError::Connack => None,
             ReadError::Decode(err) => Some(err),
             ReadError::Read(err) => Some(err),
             ReadError::Reserve(err) => Some(err),
@@ -186,7 +190,13 @@ impl<'c> Connection<'c> {
         self.writer.flush().map_err(EncodeError::Write)?;
 
         trace!("waiting for the CONNACK");
-        self.reader.recv().map_err(ConnectError::Read)
+        self.reader
+            .recv()
+            .map_err(ConnectError::Read)
+            .and_then(|p| {
+                p.try_into_conn_ack()
+                    .map_err(|_| ConnectError::Read(ReadError::Connack))
+            })
     }
 
     /// Sends a [`ClientPublishRef`] to the connection with QoS at most once (0).
@@ -196,10 +206,12 @@ impl<'c> Connection<'c> {
 
         publish.write(&mut self.writer)?;
 
+        self.writer.flush().map_err(EncodeError::Write)?;
+
         Ok(())
     }
 
-    /// Sends a PUBLISH to the connection with QoS > 0.
+    /// Sends a PUBLISH to the connection with QoS 1 or 2.
     ///
     /// It will return the [`PacketId`] of the publish.
     #[instrument(skip(self))]
@@ -224,7 +236,19 @@ impl<'c> Connection<'c> {
 
         publish.write(&mut self.writer)?;
 
+        self.writer.flush().map_err(EncodeError::Write)?;
+
         Ok(pkid)
+    }
+
+    /// Returns the next packet received from the server.
+    ///
+    /// It will also handle keeping the connection alive and the control messages for acknowledge
+    /// packets for QoS 2.
+    #[instrument(skip(self))]
+    #[must_use]
+    pub fn revc<'a>(&'a mut self) -> Result<Packet<'a>, ConnectError> {
+        self.reader.recv().map_err(ConnectError::Read)
     }
 }
 
@@ -235,15 +259,6 @@ pub struct ReadBuffer {
     data_start: usize,
     data_end: usize,
     max_size: NonZeroUsize,
-}
-
-/// Const constructor for the [`NonZeroUsize`] without unsafe.
-const fn const_non_zero(value: usize) -> NonZeroUsize {
-    let Some(value) = NonZeroUsize::new(value) else {
-        panic!("BUG: non zero value passed const_non_zero");
-    };
-
-    value
 }
 
 impl ReadBuffer {
@@ -303,7 +318,7 @@ impl ReadBuffer {
 
     fn parse<'a, T>(&'a mut self) -> Result<T, DecodeError>
     where
-        T: DecodePacket<'a>,
+        T: Decode<'a>,
     {
         match T::parse(&self.buf[self.data_start..self.data_end]) {
             Ok((val, bytes)) => {
@@ -317,8 +332,35 @@ impl ReadBuffer {
         }
     }
 
+    fn parse_packet(&mut self, header: FixedHeader) -> Result<Packet, DecodeError> {
+        let remaining_length =
+            usize::try_from(header.remaining_length()).map_err(DecodeError::RemainingLength)?;
+
+        let new_start = self.data_start.saturating_add(remaining_length);
+        let start = std::mem::replace(&mut self.data_start, new_start);
+
+        debug_assert!(self.data_start <= self.data_end);
+
+        let bytes = &self.buf[start..self.data_start];
+
+        match Packet::parse_with_header(header, bytes) {
+            Ok(val) => {
+                let consumed = self.consumed(bytes);
+
+                self.data_start = self.data_start.saturating_add(consumed);
+
+                Ok(val)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn writable_len(&self) -> usize {
         self.buf.len().saturating_sub(self.data_end)
+    }
+
+    fn readable_len(&self) -> usize {
+        self.data_end.saturating_sub(self.data_start)
     }
 
     fn reserve(&mut self, needed: usize) -> Result<(), ReadError> {
@@ -402,35 +444,41 @@ impl<'c> TcpReader<'c> {
     /// If the buffer is empty, reads from the connection. Otherwise tries to parse the data in the
     /// buffer. If more bytes are needed, makes sure the capacity is reserved in the array and reads
     /// more from the connection.
-    fn recv<T>(&mut self) -> Result<T, ReadError>
-    where
-        for<'a> T: DecodePacket<'a>,
-    {
+    fn recv(&mut self) -> Result<Packet, ReadError> {
         if self.buf.is_empty() {
             self.buf.reset();
 
             self.read()?;
         }
 
-        loop {
-            let needed = match self.buf.parse::<T>() {
-                Ok(val) => return Ok(val),
-                Err(DecodeError::NotEnoughBytes { needed, .. }) => needed,
-                Err(err) => {
-                    if err.must_close() {
-                        if let Err(err) = self.stream.shutdown(std::net::Shutdown::Both) {
-                            error!(error = %err, "couldnt shutdown socket");
-                        }
-                    }
+        let fixed_header: FixedHeader = loop {
+            match self.buf.parse() {
+                Ok(header) => break header,
+                Err(DecodeError::NotEnoughBytes { needed }) => {
+                    self.buf.reserve(needed)?;
 
+                    self.read()?;
+                }
+                Err(err) => {
                     return Err(ReadError::Decode(err));
                 }
-            };
+            }
+        };
 
-            self.buf.reserve(needed)?;
+        let needed = fixed_header
+            .remaining_length()
+            .try_into()
+            .map_err(DecodeError::RemainingLength)?;
 
+        self.buf.reserve(needed)?;
+
+        while self.buf.readable_len() < needed {
             self.read()?;
         }
+
+        self.buf
+            .parse_packet(fixed_header)
+            .map_err(ReadError::Decode)
     }
 }
 
@@ -442,4 +490,13 @@ impl<'a> Writer for BufWriter<&'a TcpStream> {
 
         Ok(buf.len())
     }
+}
+
+/// Const constructor for the [`NonZeroUsize`] without unsafe.
+const fn const_non_zero(value: usize) -> NonZeroUsize {
+    let Some(value) = NonZeroUsize::new(value) else {
+        panic!("BUG: non zero value passed const_non_zero");
+    };
+
+    value
 }

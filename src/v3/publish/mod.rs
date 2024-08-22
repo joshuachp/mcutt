@@ -5,7 +5,7 @@ use core::{fmt::Display, ops::Deref};
 use memchr::memchr2;
 
 use super::{
-    header::{ControlPacketType, FixedHeader, PacketId, Str, StrError, TypeFlags},
+    header::{ControlPacketType, FixedHeader, PacketId, RemainingLength, Str, StrError, TypeFlags},
     Decode, DecodeError, DecodePacket, Encode, EncodePacket,
 };
 
@@ -39,9 +39,26 @@ impl<S, B> Publish<S, B> {
         publish
     }
 
-    /// Returns the packet identifier if the QoS > 0.
+    /// Returns the packet identifier if the QoS 1 or 2.
     pub fn pkid(&self) -> Option<PacketId> {
         self.qos.pkid()
+    }
+}
+
+impl<S, B> Display for Publish<S, B>
+where
+    S: Display,
+    B: Deref<Target = [u8]>,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "PUBLISH topic({}) {} retain({}) payload({} bytes)",
+            self.topic,
+            self.qos,
+            self.retain,
+            self.payload.len()
+        )
     }
 }
 
@@ -125,7 +142,7 @@ impl<'a> DecodePacket<'a> for PublishRef<'a> {
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
         let (topic, bytes) = Topic::parse(bytes)?;
 
-        let (qos, payload) = PublishQos::parse_with_header(&header, bytes)?;
+        let (qos, payload) = PublishQos::parse_with_header(header, bytes)?;
 
         let retain = header.flags().contains(TypeFlags::PUBLISH_RETAIN);
 
@@ -154,24 +171,21 @@ impl PublishQos {
         }
     }
 
-    fn pkid(&self) -> Option<PacketId> {
+    fn pkid(self) -> Option<PacketId> {
         match self {
             PublishQos::AtMostOnce => None,
             PublishQos::AtLeastOnce { pkid, .. } | PublishQos::ExactlyOnce { pkid, .. } => {
-                Some(*pkid)
+                Some(pkid)
             }
         }
     }
 
-    fn parse_with_header<'a>(
-        header: &FixedHeader,
-        bytes: &'a [u8],
-    ) -> Result<(Self, &'a [u8]), DecodeError> {
+    fn parse_with_header(header: FixedHeader, bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        const QOS_0: TypeFlags = TypeFlags::empty();
+
         let dup = header.flags().contains(TypeFlags::PUBLISH_DUP);
 
         let qos = header.flags() & TypeFlags::PUBLISH_QOS_MASK;
-
-        const QOS_0: TypeFlags = TypeFlags::empty();
 
         match qos {
             QOS_0 => Ok((PublishQos::AtMostOnce, bytes)),
@@ -186,6 +200,16 @@ impl PublishQos {
                 Ok((PublishQos::ExactlyOnce { dup, pkid }, bytes))
             }
             _ => Err(DecodeError::Reserved),
+        }
+    }
+}
+
+impl Display for PublishQos {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PublishQos::AtMostOnce => write!(f, "QoS 0"),
+            PublishQos::AtLeastOnce { dup, pkid } => write!(f, "QoS(1) pkid({pkid}) dup({dup})"),
+            PublishQos::ExactlyOnce { dup, pkid } => write!(f, "QoS(2) pkid({pkid}) dup({dup})"),
         }
     }
 }
@@ -280,6 +304,15 @@ pub type TopicRef<'a> = Topic<&'a str>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Topic<S>(Str<S>);
 
+impl<S> Display for Topic<S>
+where
+    S: Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
 impl<S> Deref for Topic<S> {
     type Target = Str<S>;
 
@@ -314,6 +347,60 @@ impl<'a> Decode<'a> for TopicRef<'a> {
 
 fn contains_wildcard_char(topic: &str) -> bool {
     memchr2(b'+', b'#', topic.as_bytes()).is_some()
+}
+
+/// A PUBACK Packet is the response to a PUBLISH Packet with QoS level 1.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718043>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PubAck {
+    pkid: PacketId,
+}
+
+impl PubAck {
+    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+
+    /// Create the PUBACK for the given packet id.
+    #[must_use]
+    pub const fn new(pkid: PacketId) -> Self {
+        Self { pkid }
+    }
+
+    /// Returns the packet identifier.
+    #[must_use]
+    pub fn pkid(&self) -> PacketId {
+        self.pkid
+    }
+}
+
+impl Display for PubAck {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "PUBACK pkid({})", self.pkid)
+    }
+}
+
+impl<'a> DecodePacket<'a> for PubAck {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubAck
+    }
+
+    fn fixed_remaining_length() -> Option<RemainingLength> {
+        Some(Self::REMAINIGN_LENGTH)
+    }
+
+    fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if !header.flags().is_empty() {
+            return Err(DecodeError::Reserved);
+        }
+
+        let (pkid, bytes) = PacketId::parse(bytes)?;
+        debug_assert!(
+            bytes.is_empty(),
+            "BUG: remaining length was correct, but bytes are still present after parsing"
+        );
+
+        Ok(Self::new(pkid))
+    }
 }
 
 #[cfg(test)]

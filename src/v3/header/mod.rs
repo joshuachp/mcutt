@@ -83,8 +83,18 @@ impl<'a> Str<&'a str> {
     }
 
     /// Returns the inner string.
+    #[must_use]
     pub const fn as_str(self) -> &'a str {
         self.0
+    }
+}
+
+impl<S> Display for Str<S>
+where
+    S: Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Display::fmt(&self.0, f)
     }
 }
 
@@ -291,6 +301,9 @@ pub struct FixedHeader {
 }
 
 impl FixedHeader {
+    /// Max number of bytes the header will require
+    pub const MAX_BYTES: usize = 1 + 4;
+
     pub(crate) fn new(
         packet_type: ControlPacketType,
         flags: TypeFlags,
@@ -710,7 +723,7 @@ mod tests {
 
     #[test]
     fn should_require_more_bytes_for_fixed_header() {
-        let bytes = &[0b00010000, 0x80];
+        let bytes = &[0b0001_0000, 0x80];
 
         let err = FixedHeader::parse(bytes).unwrap_err();
 

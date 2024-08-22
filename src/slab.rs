@@ -1,4 +1,4 @@
-//! Store for the packets with QoS > 0.
+//! Store for the packets with QoS is 1 or 2.
 //!
 //! This will permit to store the values and resend them when reconnecting with a clean session.
 
@@ -12,6 +12,7 @@ pub struct Slab<S> {
 
 impl<S> Slab<S> {
     /// Create a new slab from the given store.
+    #[must_use]
     pub fn new(max_items: usize) -> Self
     where
         S: Default,
@@ -41,6 +42,10 @@ impl<T> Slab<Vec<Entry<T>>> {
     }
 
     /// Insert a new value in the first free element if there is still space in the slab.
+    ///
+    /// # Errors
+    ///
+    /// If the closures returns an error.
     pub fn try_insert<F, O, E>(&mut self, f: F) -> Result<Option<O>, E>
     where
         F: FnOnce(usize) -> Result<(T, O), E>,

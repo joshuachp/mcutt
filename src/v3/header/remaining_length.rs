@@ -72,6 +72,18 @@ impl RemainingLength {
     /// Maximum value of the remaining length
     pub const MAX: u32 = 268_435_455;
 
+    /// Create a new remaining length from the [`u32`] value.
+    ///
+    /// # Panics
+    ///
+    /// If the [`u32`] is bigger than the [`MAX`](Self::MAX)
+    #[must_use]
+    pub const fn new_const(value: u32) -> Self {
+        assert!(value <= Self::MAX, "remaining length is too big");
+
+        Self(value)
+    }
+
     // count the continue flags
     fn count_continue_flags(bytes: &[u8]) -> usize {
         bytes
@@ -82,7 +94,8 @@ impl RemainingLength {
     }
 
     /// Number of bytes the length will occupy
-    fn bytes_len(&self) -> usize {
+    #[must_use]
+    pub fn bytes_len(&self) -> usize {
         match self.0 {
             0..=127 => 1,
             128..=16_383 => 2,
@@ -98,10 +111,7 @@ impl RemainingLength {
         Ok((Self(len.read()), bytes))
     }
 
-    fn write_with_len<const N: usize, W>(
-        &self,
-        writer: &mut W,
-    ) -> Result<usize, EncodeError<W::Err>>
+    fn write_with_len<const N: usize, W>(self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
     where
         W: Writer,
     {
@@ -195,7 +205,7 @@ impl<'a, const N: usize> RawRemainingLength<'a, N> {
     const _CHECK: () = assert!(N <= 4);
 
     /// The bytes must be a valid remaining length.
-    fn read(&self) -> u32 {
+    fn read(self) -> u32 {
         debug_assert_eq!(RemainingLength::count_continue_flags(self.0) + 1, N);
 
         let mut multiplier = 1;
@@ -213,7 +223,7 @@ impl<'a, const N: usize> RawRemainingLength<'a, N> {
             .sum()
     }
 
-    fn from_len(len: &RemainingLength, buf: &'a mut [u8; N]) -> Self {
+    fn from_len(len: RemainingLength, buf: &'a mut [u8; N]) -> Self {
         debug_assert_eq!(len.bytes_len(), N);
 
         let mut value = len.0;
@@ -282,14 +292,14 @@ mod tests {
     #[test]
     fn should_parse_fixed_headers_remaining_length() {
         let data: &[(u32, &[u8])] = &[
-            (0, &[0b00010000, 0x00]),
-            (127, &[0b00010000, 0x7F]),
-            (128, &[0b00010000, 0x80, 0x01]),
-            (16_383, &[0b00010000, 0xFF, 0x7F]),
-            (16_384, &[0b00010000, 0x80, 0x80, 0x01]),
-            (2_097_151, &[0b00010000, 0xFF, 0xFF, 0x7F]),
-            (2_097_152, &[0b00010000, 0x80, 0x80, 0x80, 0x01]),
-            (268_435_455, &[0b00010000, 0xFF, 0xFF, 0xFF, 0x7F]),
+            (0, &[0b0001_0000, 0x00]),
+            (127, &[0b0001_0000, 0x7F]),
+            (128, &[0b0001_0000, 0x80, 0x01]),
+            (16_383, &[0b0001_0000, 0xFF, 0x7F]),
+            (16_384, &[0b0001_0000, 0x80, 0x80, 0x01]),
+            (2_097_151, &[0b0001_0000, 0xFF, 0xFF, 0x7F]),
+            (2_097_152, &[0b0001_0000, 0x80, 0x80, 0x80, 0x01]),
+            (268_435_455, &[0b0001_0000, 0xFF, 0xFF, 0xFF, 0x7F]),
         ];
 
         for (exp, bytes) in data {
@@ -304,14 +314,14 @@ mod tests {
     #[test]
     fn fixed_headers_encode() {
         let data: &[(u32, &[u8])] = &[
-            (0, &[0b00010000, 0x00]),
-            (127, &[0b00010000, 0x7F]),
-            (128, &[0b00010000, 0x80, 0x01]),
-            (16_383, &[0b00010000, 0xFF, 0x7F]),
-            (16_384, &[0b00010000, 0x80, 0x80, 0x01]),
-            (2_097_151, &[0b00010000, 0xFF, 0xFF, 0x7F]),
-            (2_097_152, &[0b00010000, 0x80, 0x80, 0x80, 0x01]),
-            (268_435_455, &[0b00010000, 0xFF, 0xFF, 0xFF, 0x7F]),
+            (0, &[0b0001_0000, 0x00]),
+            (127, &[0b0001_0000, 0x7F]),
+            (128, &[0b0001_0000, 0x80, 0x01]),
+            (16_383, &[0b0001_0000, 0xFF, 0x7F]),
+            (16_384, &[0b0001_0000, 0x80, 0x80, 0x01]),
+            (2_097_151, &[0b0001_0000, 0xFF, 0xFF, 0x7F]),
+            (2_097_152, &[0b0001_0000, 0x80, 0x80, 0x80, 0x01]),
+            (268_435_455, &[0b0001_0000, 0xFF, 0xFF, 0xFF, 0x7F]),
         ];
 
         for (v, exp) in data {
