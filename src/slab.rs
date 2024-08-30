@@ -2,7 +2,10 @@
 //!
 //! This will permit to store the values and resend them when reconnecting with a clean session.
 
-/// Structure
+/// Structure to store the published packets
+///
+// TODO: use the lest recently used free entry, we could fil the Slab until we have to re-allocate
+// and then reuse the free entries, if full re-allocate
 #[derive(Debug, Clone)]
 pub struct Slab<S> {
     max_items: usize,
@@ -25,7 +28,7 @@ impl<S> Slab<S> {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "alloc")]
 impl<T> Slab<Vec<Entry<T>>> {
     /// Insert a new value in the first free element if there is still space in the slab.
     pub fn insert<F, O>(&mut self, f: F) -> Option<O>

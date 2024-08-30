@@ -340,7 +340,7 @@ impl Display for ConnAck {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{} with session present {} and return code {}",
+            "{} session({}) {}",
             ControlPacketType::ConnAck,
             self.session_present,
             self.return_code

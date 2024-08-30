@@ -6,7 +6,7 @@ use memchr::memchr2;
 
 use super::{
     header::{ControlPacketType, FixedHeader, PacketId, RemainingLength, Str, StrError, TypeFlags},
-    Decode, DecodeError, DecodePacket, Encode, EncodePacket,
+    Decode, DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
 };
 
 #[cfg(feature = "alloc")]
@@ -375,7 +375,7 @@ impl PubAck {
 
 impl Display for PubAck {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PUBACK pkid({})", self.pkid)
+        write!(f, "{} pkid({})", ControlPacketType::PubAck, self.pkid)
     }
 }
 
@@ -400,6 +400,260 @@ impl<'a> DecodePacket<'a> for PubAck {
         );
 
         Ok(Self::new(pkid))
+    }
+}
+
+impl EncodePacket for PubAck {
+    fn remaining_len(&self) -> usize {
+        2
+    }
+
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubAck
+    }
+
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::empty()
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, super::EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        writer
+            .write_u16(self.pkid.get())
+            .map_err(EncodeError::Write)
+    }
+}
+
+/// A PUBREC Packet is the response to a PUBLISH Packet with QoS 2. It is the second packet of the QoS 2 protocol exchange.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718048>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PubRec {
+    pkid: PacketId,
+}
+
+impl PubRec {
+    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+
+    /// Create the PUBACK for the given packet id.
+    #[must_use]
+    pub const fn new(pkid: PacketId) -> Self {
+        Self { pkid }
+    }
+
+    /// Returns the packet identifier.
+    #[must_use]
+    pub fn pkid(&self) -> PacketId {
+        self.pkid
+    }
+}
+
+impl Display for PubRec {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} pkid({})", ControlPacketType::PubRec, self.pkid)
+    }
+}
+
+impl<'a> DecodePacket<'a> for PubRec {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubRec
+    }
+
+    fn fixed_remaining_length() -> Option<RemainingLength> {
+        Some(Self::REMAINIGN_LENGTH)
+    }
+
+    fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if !header.flags().is_empty() {
+            return Err(DecodeError::Reserved);
+        }
+
+        let (pkid, bytes) = PacketId::parse(bytes)?;
+        debug_assert!(
+            bytes.is_empty(),
+            "BUG: remaining length was correct, but bytes are still present after parsing"
+        );
+
+        Ok(Self::new(pkid))
+    }
+}
+
+impl EncodePacket for PubRec {
+    fn remaining_len(&self) -> usize {
+        2
+    }
+
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubRec
+    }
+
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::empty()
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, super::EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        writer
+            .write_u16(self.pkid.get())
+            .map_err(EncodeError::Write)
+    }
+}
+
+/// A PUBREL Packet is the response to a PUBREC Packet. It is the third packet of the QoS 2 protocol exchange.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718053>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PubRel {
+    pkid: PacketId,
+}
+
+impl PubRel {
+    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+
+    /// Create the PUBACK for the given packet id.
+    #[must_use]
+    pub const fn new(pkid: PacketId) -> Self {
+        Self { pkid }
+    }
+
+    /// Returns the packet identifier.
+    #[must_use]
+    pub fn pkid(&self) -> PacketId {
+        self.pkid
+    }
+}
+
+impl Display for PubRel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} pkid({})", ControlPacketType::PubRel, self.pkid)
+    }
+}
+
+impl<'a> DecodePacket<'a> for PubRel {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubRel
+    }
+
+    fn fixed_remaining_length() -> Option<RemainingLength> {
+        Some(Self::REMAINIGN_LENGTH)
+    }
+
+    fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if header.flags() != TypeFlags::PUBREL {
+            return Err(DecodeError::Reserved);
+        }
+
+        let (pkid, bytes) = PacketId::parse(bytes)?;
+        debug_assert!(
+            bytes.is_empty(),
+            "BUG: remaining length was correct, but bytes are still present after parsing"
+        );
+
+        Ok(Self::new(pkid))
+    }
+}
+
+impl EncodePacket for PubRel {
+    fn remaining_len(&self) -> usize {
+        2
+    }
+
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubRel
+    }
+
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::PUBREL
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, super::EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        writer
+            .write_u16(self.pkid.get())
+            .map_err(EncodeError::Write)
+    }
+}
+
+/// The PUBCOMP Packet is the response to a PUBREL Packet. It is the fourth and final packet of the QoS 2 protocol exchange.
+///
+/// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718058>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PubComp {
+    pkid: PacketId,
+}
+
+impl PubComp {
+    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+
+    /// Create the PUBACK for the given packet id.
+    #[must_use]
+    pub const fn new(pkid: PacketId) -> Self {
+        Self { pkid }
+    }
+
+    /// Returns the packet identifier.
+    #[must_use]
+    pub fn pkid(&self) -> PacketId {
+        self.pkid
+    }
+}
+
+impl Display for PubComp {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} pkid({})", ControlPacketType::PubComp, self.pkid)
+    }
+}
+
+impl<'a> DecodePacket<'a> for PubComp {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubComp
+    }
+
+    fn fixed_remaining_length() -> Option<RemainingLength> {
+        Some(Self::REMAINIGN_LENGTH)
+    }
+
+    fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if !header.flags().is_empty() {
+            return Err(DecodeError::Reserved);
+        }
+
+        let (pkid, bytes) = PacketId::parse(bytes)?;
+        debug_assert!(
+            bytes.is_empty(),
+            "BUG: remaining length was correct, but bytes are still present after parsing"
+        );
+
+        Ok(Self::new(pkid))
+    }
+}
+
+impl EncodePacket for PubComp {
+    fn remaining_len(&self) -> usize {
+        2
+    }
+
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::PubComp
+    }
+
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::empty()
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, super::EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        writer
+            .write_u16(self.pkid.get())
+            .map_err(EncodeError::Write)
     }
 }
 

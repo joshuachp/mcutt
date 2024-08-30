@@ -7,7 +7,7 @@ use std::{
     net::TcpStream,
 };
 
-use tracing::{instrument, trace};
+use tracing::{error, instrument, trace};
 
 use crate::{
     slab::{Entry, Slab},
@@ -248,7 +248,28 @@ impl<'c> Connection<'c> {
     #[instrument(skip(self))]
     #[must_use]
     pub fn revc<'a>(&'a mut self) -> Result<Packet<'a>, ConnectError> {
-        self.reader.recv().map_err(ConnectError::Read)
+        let packet = self.reader.recv().map_err(ConnectError::Read)?;
+
+        match packet {
+            Packet::ConnAck(_) => {}
+            Packet::Publish(_publish) => todo!(),
+            Packet::PubAck(puback) => {
+                // Here we shouldn't error since we cannot respond to the server and closing the
+                // connection wouldn't be helpful if the connection is not cleared (the spec doesn't
+                // tell us anything about this).
+                let present = self
+                    .outgoing
+                    .remove(usize::from(puback.pkid()).saturating_sub(1))
+                    .is_some();
+
+                debug_assert!(present, "received {puback} without outgoing publish");
+                if !present {
+                    error!("received {puback} without outgoing publish")
+                }
+            }
+        }
+
+        Ok(packet)
     }
 }
 
@@ -476,9 +497,12 @@ impl<'c> TcpReader<'c> {
             self.read()?;
         }
 
-        self.buf
+        let packet = self
+            .buf
             .parse_packet(fixed_header)
-            .map_err(ReadError::Decode)
+            .map_err(ReadError::Decode)?;
+
+        Ok(packet)
     }
 }
 
