@@ -2,7 +2,7 @@
 
 use alloc::{string::String, vec::Vec};
 
-use super::{ClientPublish, ClientPublishRef, Publish, PublishRef, Topic, TopicRef};
+use super::{ClientPublish, ClientPublishRef, Publish, PublishRef, PublishTopic, PublishTopicRef};
 
 /// [`Publish`] with Owned data.
 pub type PublishOwned = Publish<String, Vec<u8>>;
@@ -18,11 +18,11 @@ impl<'a> From<PublishRef<'a>> for PublishOwned {
     }
 }
 
-/// [`Topic`] with owned data.
-pub type TopicOwned = Topic<String>;
+/// [`Topic`](PublishTopic) with owned data.
+pub type PublishTopicOwned = PublishTopic<String>;
 
-impl<'a> From<TopicRef<'a>> for TopicOwned {
-    fn from(value: TopicRef<'a>) -> Self {
+impl<'a> From<PublishTopicRef<'a>> for PublishTopicOwned {
+    fn from(value: PublishTopicRef<'a>) -> Self {
         Self(value.0.into())
     }
 }

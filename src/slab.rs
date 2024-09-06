@@ -8,15 +8,15 @@
 // and then reuse the free entries, if full re-allocate
 #[derive(Debug, Clone)]
 pub struct Slab<S> {
-    max_items: usize,
-    next_free: Option<usize>,
+    max_items: u16,
+    next_free: Option<u16>,
     store: S,
 }
 
 impl<S> Slab<S> {
     /// Create a new slab from the given store.
     #[must_use]
-    pub fn new(max_items: usize) -> Self
+    pub fn new(max_items: u16) -> Self
     where
         S: Default,
     {
@@ -33,13 +33,13 @@ impl<T> Slab<Vec<Entry<T>>> {
     /// Insert a new value in the first free element if there is still space in the slab.
     pub fn insert<F, O>(&mut self, f: F) -> Option<O>
     where
-        F: FnOnce(usize) -> (T, O),
+        F: FnOnce(u16) -> (T, O),
     {
         let idx = self.reserve_next()?;
 
         let (value, out) = (f)(idx);
 
-        self.next_free = self.store.get_mut(idx)?.store(value);
+        self.next_free = self.store.get_mut(usize::from(idx))?.store(value);
 
         Some(out)
     }
@@ -51,7 +51,7 @@ impl<T> Slab<Vec<Entry<T>>> {
     /// If the closures returns an error.
     pub fn try_insert<F, O, E>(&mut self, f: F) -> Result<Option<O>, E>
     where
-        F: FnOnce(usize) -> Result<(T, O), E>,
+        F: FnOnce(u16) -> Result<(T, O), E>,
     {
         let Some(idx) = self.reserve_next() else {
             return Ok(None);
@@ -60,7 +60,7 @@ impl<T> Slab<Vec<Entry<T>>> {
         let (value, out) = (f)(idx)?;
 
         // check to prevent panics, but should never happen
-        let Some(entry) = self.store.get_mut(idx) else {
+        let Some(entry) = self.store.get_mut(usize::from(idx)) else {
             return Ok(None);
         };
 
@@ -70,12 +70,14 @@ impl<T> Slab<Vec<Entry<T>>> {
     }
 
     /// Returns the next free index or reserve a new empty one.
-    fn reserve_next(&mut self) -> Option<usize> {
+    fn reserve_next(&mut self) -> Option<u16> {
         if let Some(next_free) = self.next_free {
             return Some(next_free);
         }
 
-        let idx = self.store.len();
+        let idx = u16::try_from(self.store.len());
+        debug_assert!(idx.is_ok(), "the length is bigger than u16::MAX");
+        let idx = idx.ok()?;
 
         if idx >= self.max_items {
             return None;
@@ -86,7 +88,7 @@ impl<T> Slab<Vec<Entry<T>>> {
                 .store
                 .capacity()
                 .saturating_mul(2)
-                .min(self.max_items)
+                .min(self.max_items.into())
                 .saturating_sub(self.store.len());
 
             self.store.reserve_exact(additional);
@@ -98,8 +100,8 @@ impl<T> Slab<Vec<Entry<T>>> {
     }
 
     /// Removes an element from the slab given the index.
-    pub fn remove(&mut self, idx: usize) -> Option<T> {
-        let item = self.store.get_mut(idx)?;
+    pub fn remove(&mut self, idx: u16) -> Option<T> {
+        let item = self.store.get_mut(usize::from(idx))?;
 
         let prev = core::mem::replace(
             item,
@@ -118,9 +120,18 @@ impl<T> Slab<Vec<Entry<T>>> {
         }
     }
 
-    /// Returns an occupied element given the index.
-    pub fn get(&mut self, idx: usize) -> Option<&T> {
-        self.store.get(idx).and_then(Entry::as_occupied)
+    /// Returns a reference to an occupied element given the index.
+    pub fn get(&self, idx: u16) -> Option<&T> {
+        self.store
+            .get(usize::from(idx))
+            .and_then(Entry::as_occupied)
+    }
+
+    /// Returns a mutable reference to an occupied element given the index.
+    pub fn get_mut(&mut self, idx: u16) -> Option<&mut T> {
+        self.store
+            .get_mut(usize::from(idx))
+            .and_then(Entry::as_occupied_mut)
     }
 }
 
@@ -130,7 +141,7 @@ pub enum Entry<T> {
     /// A free element
     Free {
         /// The next free element of the slab
-        next_free: Option<usize>,
+        next_free: Option<u16>,
     },
     /// A occupied  element
     Occupied(T),
@@ -146,7 +157,7 @@ impl<T> Entry<T> {
     }
 
     /// Stores the value returning the next free entry.
-    fn store(&mut self, value: T) -> Option<usize> {
+    fn store(&mut self, value: T) -> Option<u16> {
         debug_assert!(self.is_free(), "BUG: storing in an already occupied entry");
 
         match core::mem::replace(self, Entry::Occupied(value)) {
@@ -157,6 +168,15 @@ impl<T> Entry<T> {
 
     /// Returns a reference to the value of an [`Occupied`](Entry::Occupied) entry.
     pub fn as_occupied(&self) -> Option<&T> {
+        if let Self::Occupied(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the value of an [`Occupied`](Entry::Occupied) entry.
+    pub fn as_occupied_mut(&mut self) -> Option<&mut T> {
         if let Self::Occupied(v) = self {
             Some(v)
         } else {

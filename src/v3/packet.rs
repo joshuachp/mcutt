@@ -10,7 +10,7 @@ use crate::{
 use super::{
     connect::ConnAck,
     header::FixedHeader,
-    publish::{PubAck, PublishRef},
+    publish::{PubAck, PubComp, PubRec, PubRel, PublishRef},
     Decode, DecodePacket,
 };
 
@@ -23,6 +23,12 @@ pub enum Packet<'a> {
     Publish(PublishRef<'a>),
     /// PUBACK from the Server after a PUBLISH with QoS 1.
     PubAck(PubAck),
+    /// PUBREC from the Server after a PUBLISH with QoS 2.
+    PubRec(PubRec),
+    /// A PUBREL Packet is the response to a PUBREC Packet.
+    PubRel(PubRel),
+    /// The PUBCOMP Packet is the response to a PUBREL Packet.
+    PubComp(PubComp),
 }
 
 impl<'a> Packet<'a> {
@@ -54,10 +60,13 @@ impl<'a> Packet<'a> {
             ControlPacketType::ConnAck => Self::parse_packet::<ConnAck>(header, bytes),
             ControlPacketType::Publish => Self::parse_packet::<PublishRef>(header, bytes),
             ControlPacketType::PubAck => Self::parse_packet::<PubAck>(header, bytes),
-            ControlPacketType::PubRec => todo!(),
-            ControlPacketType::PubRel => todo!(),
-            ControlPacketType::PubComp => todo!(),
-            ControlPacketType::Subscribe => todo!(),
+            ControlPacketType::PubRec => Self::parse_packet::<PubRec>(header, bytes),
+            ControlPacketType::PubRel => Self::parse_packet::<PubRel>(header, bytes),
+            ControlPacketType::PubComp => Self::parse_packet::<PubComp>(header, bytes),
+            ControlPacketType::Subscribe => {
+                // The Subscribe is only sent from the Client to the Server
+                Err(DecodeError::Reserved)
+            }
             ControlPacketType::SubAck => todo!(),
             ControlPacketType::Unsubscribe => todo!(),
             ControlPacketType::UnsubAck => todo!(),
@@ -179,6 +188,9 @@ impl<'a> Display for Packet<'a> {
             Packet::ConnAck(value) => Display::fmt(value, f),
             Packet::Publish(value) => Display::fmt(value, f),
             Packet::PubAck(value) => Display::fmt(value, f),
+            Packet::PubRec(value) => Display::fmt(value, f),
+            Packet::PubRel(value) => Display::fmt(value, f),
+            Packet::PubComp(value) => Display::fmt(value, f),
         }
     }
 }
@@ -197,9 +209,9 @@ impl<'a> Decode<'a> for Packet<'a> {
     }
 }
 
-impl<'a> From<PubAck> for Packet<'a> {
-    fn from(v: PubAck) -> Self {
-        Self::PubAck(v)
+impl<'a> From<ConnAck> for Packet<'a> {
+    fn from(v: ConnAck) -> Self {
+        Self::ConnAck(v)
     }
 }
 
@@ -209,8 +221,26 @@ impl<'a> From<PublishRef<'a>> for Packet<'a> {
     }
 }
 
-impl<'a> From<ConnAck> for Packet<'a> {
-    fn from(v: ConnAck) -> Self {
-        Self::ConnAck(v)
+impl<'a> From<PubAck> for Packet<'a> {
+    fn from(v: PubAck) -> Self {
+        Self::PubAck(v)
+    }
+}
+
+impl<'a> From<PubRec> for Packet<'a> {
+    fn from(v: PubRec) -> Self {
+        Self::PubRec(v)
+    }
+}
+
+impl<'a> From<PubRel> for Packet<'a> {
+    fn from(v: PubRel) -> Self {
+        Self::PubRel(v)
+    }
+}
+
+impl<'a> From<PubComp> for Packet<'a> {
+    fn from(v: PubComp) -> Self {
+        Self::PubComp(v)
     }
 }

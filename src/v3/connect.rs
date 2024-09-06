@@ -14,7 +14,7 @@ use crate::bytes::read_u8;
 
 use super::{
     header::{BytesBuf, ControlPacketType, FixedHeader, RemainingLength, StrRef, TypeFlags},
-    DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
+    DecodeError, DecodePacket, Encode, EncodeError, EncodePacket, Qos,
 };
 
 /// First message sent by the Client to the Server.
@@ -75,16 +75,16 @@ impl<'a> Connect<'a> {
     /// If the client is disconnected for a network failure, the keep alive expires, protocol error, or the
     /// connection is closed without a DISCONNECT packet. The Server will publish the will message
     /// on the specified topic.
-    pub fn will(&mut self, message: Will<'a>, qos: WillQoS, retain: bool) -> &mut Self {
+    pub fn will(&mut self, message: Will<'a>, qos: Qos, retain: bool) -> &mut Self {
         self.will = Some(message);
 
         self.flags |= ConnectFlags::WILL_FLAG;
 
         self.flags &= ConnectFlags::WILL_QOS_RESET;
         match qos {
-            WillQoS::AtMostOnce => {}
-            WillQoS::AtLeastOnce => self.flags |= ConnectFlags::WILL_QOS_1,
-            WillQoS::ExactlyOnce => self.flags |= ConnectFlags::WILL_QOS_2,
+            Qos::AtMostOnce => {}
+            Qos::AtLeastOnce => self.flags |= ConnectFlags::WILL_QOS_1,
+            Qos::ExactlyOnce => self.flags |= ConnectFlags::WILL_QOS_2,
         };
 
         if retain {
@@ -287,27 +287,6 @@ impl<'a> Encode for Will<'a> {
     }
 }
 
-/// Quality of service for a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WillQoS {
-    /// At most once delivery.
-    AtMostOnce,
-    /// At least once delivery.
-    AtLeastOnce,
-    /// Exactly once delivery.
-    ExactlyOnce,
-}
-
-impl Display for WillQoS {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            WillQoS::AtMostOnce => write!(f, "QoS (0)"),
-            WillQoS::AtLeastOnce => write!(f, "QoS (1)"),
-            WillQoS::ExactlyOnce => write!(f, "QoS (2)"),
-        }
-    }
-}
-
 /// Is the server response to the [`Connect`] packet.
 ///
 /// It's the first packet sent from the client.
@@ -482,7 +461,7 @@ mod tests {
 
         connect
             .clean_session()
-            .will(will, WillQoS::AtLeastOnce, true)
+            .will(will, Qos::AtLeastOnce, true)
             .username_password(
                 Str::try_from("username").unwrap(),
                 BytesBuf::try_from(b"passwd".as_slice()).unwrap(),

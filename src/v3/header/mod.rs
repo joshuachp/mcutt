@@ -104,6 +104,15 @@ impl<'a> Default for StrRef<'a> {
     }
 }
 
+impl<'a, S> From<&'a Str<S>> for StrRef<'a>
+where
+    S: Deref<Target = str>,
+{
+    fn from(value: &'a Str<S>) -> Self {
+        Self(value)
+    }
+}
+
 impl<'a> TryFrom<&'a str> for StrRef<'a> {
     type Error = StrError;
 
@@ -592,9 +601,9 @@ impl<'a> Decode<'a> for PacketId {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         let (pkid, rest) = read_u16(bytes)?;
 
-        let pkid = NonZeroU16::new(pkid).ok_or(PacketIdError)?;
+        let pkid = PacketId::try_from(pkid)?;
 
-        Ok((Self(pkid), rest))
+        Ok((pkid, rest))
     }
 }
 
@@ -625,8 +634,15 @@ impl TryFrom<usize> for PacketId {
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         u16::try_from(value)
             .map_err(|_| PacketIdError)
-            .and_then(|value| NonZeroU16::new(value).ok_or(PacketIdError))
-            .map(PacketId)
+            .and_then(PacketId::try_from)
+    }
+}
+
+impl TryFrom<u16> for PacketId {
+    type Error = PacketIdError;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        NonZeroU16::new(value).ok_or(PacketIdError).map(PacketId)
     }
 }
 

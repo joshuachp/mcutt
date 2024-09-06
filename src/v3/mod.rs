@@ -17,6 +17,7 @@ pub mod connect;
 pub mod header;
 pub mod packet;
 pub mod publish;
+pub mod subscribe;
 
 /// The default maximum packet size permitted by the spec.
 ///
@@ -67,11 +68,15 @@ pub enum DecodeError {
         actual: ControlPacketType,
     },
     /// A reserved field was used.
+    ///
+    /// This indicates a protocol violation.
     Reserved,
     /// Couldn't decode the publish topic.
     PublishTopic(TopicError),
     /// Not all bytes consumed in the packet
     RemainingBytes,
+    /// A [`Subscribe`](subscribe::Subscribe) packet must have at least one topic filter.
+    EmptySubscribe,
 }
 
 impl DecodeError {
@@ -98,7 +103,8 @@ impl DecodeError {
             | DecodeError::MismatchedPacketType { .. }
             | DecodeError::Reserved
             | DecodeError::PublishTopic(_)
-            | DecodeError::RemainingBytes => true,
+            | DecodeError::RemainingBytes
+            | DecodeError::EmptySubscribe => true,
         }
     }
 }
@@ -140,6 +146,9 @@ impl Display for DecodeError {
             DecodeError::RemainingBytes => {
                 write!(f, "not all the bytes in the packet were consumed")
             }
+            DecodeError::EmptySubscribe => {
+                write!(f, "a subscribe packet must have at leaset one topic filter")
+            }
         }
     }
 }
@@ -155,7 +164,8 @@ impl Error for DecodeError {
             | DecodeError::PacketType(_)
             | DecodeError::MismatchedPacketType { .. }
             | DecodeError::Reserved
-            | DecodeError::RemainingBytes => None,
+            | DecodeError::RemainingBytes
+            | DecodeError::EmptySubscribe => None,
             DecodeError::PacketIdentifier(err) => Some(err),
             DecodeError::Str(err) => Some(err),
             DecodeError::RemainingLength(err) => Some(err),
@@ -412,6 +422,22 @@ pub trait Encode {
         W: Writer;
 }
 
+impl<T> Encode for &T
+where
+    T: Encode,
+{
+    fn encode_len(&self) -> usize {
+        <T as Encode>::encode_len(self)
+    }
+
+    fn write<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: Writer,
+    {
+        <T as Encode>::write(self, writer)
+    }
+}
+
 /// Encode a raw buffer, without prefixing it with a length.
 impl Encode for &[u8] {
     fn encode_len(&self) -> usize {
@@ -458,6 +484,50 @@ pub trait Writer {
     /// It will return error if the underling write failed.
     fn write_u16(&mut self, value: u16) -> Result<usize, Self::Err> {
         self.write_slice(&value.to_be_bytes())
+    }
+}
+
+/// Quality of service for a various message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Qos {
+    /// At most once delivery.
+    AtMostOnce,
+    /// At least once delivery.
+    AtLeastOnce,
+    /// Exactly once delivery.
+    ExactlyOnce,
+}
+
+impl Display for Qos {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Qos::AtMostOnce => write!(f, "QoS(0)"),
+            Qos::AtLeastOnce => write!(f, "QoS(1)"),
+            Qos::ExactlyOnce => write!(f, "QoS(2)"),
+        }
+    }
+}
+
+impl From<Qos> for u8 {
+    fn from(value: Qos) -> Self {
+        match value {
+            Qos::AtMostOnce => 0,
+            Qos::AtLeastOnce => 1,
+            Qos::ExactlyOnce => 2,
+        }
+    }
+}
+
+impl TryFrom<u8> for Qos {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Qos::AtMostOnce),
+            1 => Ok(Qos::AtLeastOnce),
+            2 => Ok(Qos::ExactlyOnce),
+            3.. => Err(value),
+        }
     }
 }
 

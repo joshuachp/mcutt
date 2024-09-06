@@ -10,7 +10,7 @@ use super::{
 };
 
 #[cfg(feature = "alloc")]
-pub use self::alloc::{ClientPublishOwned, PublishOwned, TopicOwned};
+pub use self::alloc::{ClientPublishOwned, PublishOwned, PublishTopicOwned};
 
 #[cfg(feature = "alloc")]
 mod alloc;
@@ -25,13 +25,13 @@ pub type PublishRef<'a> = Publish<&'a str, &'a [u8]>;
 pub struct Publish<S, B> {
     qos: PublishQos,
     retain: bool,
-    topic: Topic<S>,
+    topic: PublishTopic<S>,
     payload: B,
 }
 
 impl<S, B> Publish<S, B> {
     /// Create a publish from the client one with the missing data.
-    pub fn with_qos(pkid: PacketId, publish: ClientPublish<S, B>, qos: Qos) -> Self {
+    pub fn with_qos(pkid: PacketId, publish: ClientPublish<S, B>, qos: ClientQos) -> Self {
         let mut publish = Publish::from(publish);
 
         publish.qos = PublishQos::from_qos(pkid, qos);
@@ -43,6 +43,11 @@ impl<S, B> Publish<S, B> {
     pub fn pkid(&self) -> Option<PacketId> {
         self.qos.pkid()
     }
+
+    /// Returns the publish QoS.
+    pub fn qos(&self) -> &PublishQos {
+        &self.qos
+    }
 }
 
 impl<S, B> Display for Publish<S, B>
@@ -53,7 +58,8 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "PUBLISH topic({}) {} retain({}) payload({} bytes)",
+            "{} topic({}) {} retain({}) payload({} bytes)",
+            ControlPacketType::Publish,
             self.topic,
             self.qos,
             self.retain,
@@ -140,7 +146,7 @@ impl<'a> DecodePacket<'a> for PublishRef<'a> {
     }
 
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        let (topic, bytes) = Topic::parse(bytes)?;
+        let (topic, bytes) = PublishTopic::parse(bytes)?;
 
         let (qos, payload) = PublishQos::parse_with_header(header, bytes)?;
 
@@ -155,19 +161,33 @@ impl<'a> DecodePacket<'a> for PublishRef<'a> {
     }
 }
 
+/// Level of assurance for delivery of an Application Message.
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::enum_variant_names)]
-enum PublishQos {
+pub enum PublishQos {
+    /// At most once delivery.
     AtMostOnce,
-    AtLeastOnce { dup: bool, pkid: PacketId },
-    ExactlyOnce { dup: bool, pkid: PacketId },
+    /// At least once delivery.
+    AtLeastOnce {
+        /// Flag to indicate if the packet is a duplicate.
+        dup: bool,
+        /// Packet identifier.
+        pkid: PacketId,
+    },
+    /// Exactly once delivery.
+    ExactlyOnce {
+        /// Flag to indicate if the packet is a duplicate.
+        dup: bool,
+        /// Packet identifier.
+        pkid: PacketId,
+    },
 }
 
 impl PublishQos {
-    fn from_qos(pkid: PacketId, qos: Qos) -> Self {
+    fn from_qos(pkid: PacketId, qos: ClientQos) -> Self {
         match qos {
-            Qos::AtLeastOnce => PublishQos::AtLeastOnce { dup: false, pkid },
-            Qos::ExactlyOnce => PublishQos::ExactlyOnce { dup: false, pkid },
+            ClientQos::AtLeastOnce => PublishQos::AtLeastOnce { dup: false, pkid },
+            ClientQos::ExactlyOnce => PublishQos::ExactlyOnce { dup: false, pkid },
         }
     }
 
@@ -202,6 +222,30 @@ impl PublishQos {
             _ => Err(DecodeError::Reserved),
         }
     }
+
+    /// Returns `true` if the publish qos is [`AtMostOnce`].
+    ///
+    /// [`AtMostOnce`]: PublishQos::AtMostOnce
+    #[must_use]
+    pub fn is_qos0(&self) -> bool {
+        matches!(self, Self::AtMostOnce)
+    }
+
+    /// Returns `true` if the publish qos is [`AtLeastOnce`].
+    ///
+    /// [`AtLeastOnce`]: PublishQos::AtLeastOnce
+    #[must_use]
+    pub fn is_qos1(&self) -> bool {
+        matches!(self, Self::AtLeastOnce { .. })
+    }
+
+    /// Returns `true` if the publish qos is [`ExactlyOnce`].
+    ///
+    /// [`ExactlyOnce`]: PublishQos::ExactlyOnce
+    #[must_use]
+    pub fn is_qos2(&self) -> bool {
+        matches!(self, Self::ExactlyOnce { .. })
+    }
 }
 
 impl Display for PublishQos {
@@ -223,13 +267,13 @@ pub type ClientPublishRef<'a> = ClientPublish<&'a str, &'a [u8]>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientPublish<S, B> {
     retain: bool,
-    topic: Topic<S>,
+    topic: PublishTopic<S>,
     payload: B,
 }
 
 impl<S, B> ClientPublish<S, B> {
     /// Creates a new PUBLISH with the given topic and payload.
-    pub fn new(topic: Topic<S>, payload: B) -> Self {
+    pub fn new(topic: PublishTopic<S>, payload: B) -> Self {
         Self {
             retain: false,
             topic,
@@ -247,23 +291,23 @@ impl<S, B> ClientPublish<S, B> {
 
 /// Quality of service of a publish packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Qos {
+pub enum ClientQos {
     /// At least once delivery (QoS 1).
     AtLeastOnce,
     /// Exactly once delivery (QoS 2).
     ExactlyOnce,
 }
 
-impl Display for Qos {
+impl Display for ClientQos {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Qos::AtLeastOnce => write!(f, "at least once delivery (1)"),
-            Qos::ExactlyOnce => write!(f, "exactly once delivery (2)"),
+            ClientQos::AtLeastOnce => write!(f, "at least once delivery (1)"),
+            ClientQos::ExactlyOnce => write!(f, "exactly once delivery (2)"),
         }
     }
 }
 
-/// Error for the publish [`Topic`]
+/// Error for the publish [`PublishTopic`]
 #[derive(Debug)]
 pub enum TopicError {
     /// Invalid UTF-8 string for the topic.
@@ -297,14 +341,14 @@ impl From<StrError> for TopicError {
     }
 }
 
-/// [`Topic`] with borrowed data.
-pub type TopicRef<'a> = Topic<&'a str>;
+/// [`Topic`](PublishTopic) with borrowed data.
+pub type PublishTopicRef<'a> = PublishTopic<&'a str>;
 
 /// The Topic Name identifies the information channel to which payload data is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Topic<S>(Str<S>);
+pub struct PublishTopic<S>(Str<S>);
 
-impl<S> Display for Topic<S>
+impl<S> Display for PublishTopic<S>
 where
     S: Display,
 {
@@ -313,7 +357,7 @@ where
     }
 }
 
-impl<S> Deref for Topic<S> {
+impl<S> Deref for PublishTopic<S> {
     type Target = Str<S>;
 
     fn deref(&self) -> &Self::Target {
@@ -321,7 +365,7 @@ impl<S> Deref for Topic<S> {
     }
 }
 
-impl<'a> TryFrom<&'a str> for TopicRef<'a> {
+impl<'a> TryFrom<&'a str> for PublishTopicRef<'a> {
     type Error = TopicError;
 
     fn try_from(value: &'a str) -> Result<Self, Self::Error> {
@@ -331,15 +375,15 @@ impl<'a> TryFrom<&'a str> for TopicRef<'a> {
             return Err(TopicError::Wildcard);
         }
 
-        Ok(Topic(topic))
+        Ok(PublishTopic(topic))
     }
 }
 
-impl<'a> Decode<'a> for TopicRef<'a> {
+impl<'a> Decode<'a> for PublishTopicRef<'a> {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         let (str, bytes) = Str::parse(bytes)?;
 
-        let topic = Topic::try_from(str.as_str())?;
+        let topic = PublishTopic::try_from(str.as_str())?;
 
         Ok((topic, bytes))
     }
@@ -503,7 +547,9 @@ impl EncodePacket for PubRec {
     }
 }
 
-/// A PUBREL Packet is the response to a PUBREC Packet. It is the third packet of the QoS 2 protocol exchange.
+/// A PUBREL Packet is the response to a PUBREC Packet.
+///
+/// It is the third packet of the QoS 2 protocol exchange.
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718053>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -663,11 +709,11 @@ mod tests {
 
     #[test]
     fn should_reject_wildcards() {
-        let err = Topic::try_from("/foo/+").unwrap_err();
+        let err = PublishTopic::try_from("/foo/+").unwrap_err();
 
         assert!(matches!(err, TopicError::Wildcard));
 
-        let err = Topic::try_from("/foo/#").unwrap_err();
+        let err = PublishTopic::try_from("/foo/#").unwrap_err();
 
         assert!(matches!(err, TopicError::Wildcard));
     }

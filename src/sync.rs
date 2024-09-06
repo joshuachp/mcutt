@@ -15,7 +15,10 @@ use crate::{
         connect::{ConnAck, Connect, ReturnCode},
         header::{FixedHeader, PacketId},
         packet::Packet,
-        publish::{ClientPublishOwned, ClientPublishRef, Publish, PublishOwned, Qos},
+        publish::{
+            ClientPublishOwned, ClientPublishRef, ClientQos, PubAck, PubComp, PubRec, Publish,
+            PublishOwned,
+        },
         Decode, DecodeError, EncodeError, EncodePacket, Writer, MAX_PACKET_SIZE,
     },
 };
@@ -154,12 +157,83 @@ impl From<DecodeError> for ReadError {
     }
 }
 
+#[derive(Debug)]
+struct State {
+    slab: Slab<Vec<Entry<Outgoing>>>,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            slab: Slab::new(u16::MAX),
+        }
+    }
+
+    fn handle_puback(&mut self, puback: &PubAck) {
+        let idx = puback.pkid().get().saturating_sub(1);
+        let Some(publish) = self.slab.get(idx).and_then(Outgoing::as_publish) else {
+            error!("received {} for missing PUBLISH", puback);
+
+            return;
+        };
+
+        if !publish.qos().is_qos1() {
+            error!("received {} for publish with {}", puback, publish.qos());
+            return;
+        }
+
+        trace!("acknowledged publish {}", puback.pkid());
+
+        self.slab.remove(idx);
+    }
+
+    fn handle_pubrec(&mut self, pubrec: &PubRec) {
+        let idx = pubrec.pkid().get().saturating_sub(1);
+        let Some(outgoing) = self.slab.get_mut(idx) else {
+            error!("received {} for missing PUBLISH", pubrec);
+
+            return;
+        };
+
+        let Some(publish) = outgoing.as_publish() else {
+            error!("received {} for missing PUBLISH", pubrec);
+
+            return;
+        };
+
+        if !publish.qos().is_qos2() {
+            error!("received {} for publish with {}", pubrec, publish.qos());
+            return;
+        }
+
+        trace!("acknowledged with PUBREC publish {}", pubrec.pkid());
+
+        *outgoing = Outgoing::PubRec;
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Outgoing {
+    Publish(PublishOwned),
+    PubRec,
+}
+
+impl Outgoing {
+    fn as_publish(&self) -> Option<&PublishOwned> {
+        if let Self::Publish(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
 /// The MQTT connection, for both reading  and writing.
 #[derive(Debug)]
 pub struct Connection<'a> {
     reader: TcpReader<'a>,
     writer: BufWriter<&'a TcpStream>,
-    outgoing: Slab<Vec<Entry<PublishOwned>>>,
+    outgoing: State,
 }
 
 impl<'c> Connection<'c> {
@@ -177,7 +251,7 @@ impl<'c> Connection<'c> {
         Self {
             reader: TcpReader::new(read_buffer, connection),
             writer: BufWriter::new(connection),
-            outgoing: Slab::new(u16::MAX.into()),
+            outgoing: State::new(),
         }
     }
 
@@ -218,20 +292,28 @@ impl<'c> Connection<'c> {
     pub fn publish_with_qos(
         &mut self,
         publish: ClientPublishOwned,
-        qos: Qos,
+        qos: ClientQos,
     ) -> Result<PacketId, ConnectError> {
         let pkid = self
             .outgoing
+            .slab
             .try_insert(|idx| {
                 PacketId::try_from(idx.saturating_add(1))
                     .map_err(DecodeError::PacketIdentifier)
-                    .map(|pkid| (PublishOwned::with_qos(pkid, publish, qos), pkid))
+                    .map(|pkid| {
+                        (
+                            Outgoing::Publish(PublishOwned::with_qos(pkid, publish, qos)),
+                            pkid,
+                        )
+                    })
             })?
             .ok_or(ConnectError::ToManyOutgoing)?;
 
         let publish = self
             .outgoing
-            .get(usize::from(pkid).saturating_sub(1))
+            .slab
+            .get(pkid.get().saturating_sub(1))
+            .and_then(Outgoing::as_publish)
             .ok_or(ConnectError::MissingPkid(pkid))?;
 
         publish.write(&mut self.writer)?;
@@ -250,23 +332,21 @@ impl<'c> Connection<'c> {
     pub fn revc<'a>(&'a mut self) -> Result<Packet<'a>, ConnectError> {
         let packet = self.reader.recv().map_err(ConnectError::Read)?;
 
-        match packet {
+        match &packet {
             Packet::ConnAck(_) => {}
             Packet::Publish(_publish) => todo!(),
             Packet::PubAck(puback) => {
-                // Here we shouldn't error since we cannot respond to the server and closing the
-                // connection wouldn't be helpful if the connection is not cleared (the spec doesn't
-                // tell us anything about this).
-                let present = self
-                    .outgoing
-                    .remove(usize::from(puback.pkid()).saturating_sub(1))
-                    .is_some();
-
-                debug_assert!(present, "received {puback} without outgoing publish");
-                if !present {
-                    error!("received {puback} without outgoing publish")
-                }
+                self.outgoing.handle_puback(puback);
             }
+            Packet::PubRec(pubrec) => {
+                self.outgoing.handle_pubrec(pubrec);
+            }
+            Packet::PubRel(pubrel) => {
+                trace!("sending PUBCOMP for {}", pubrel);
+
+                PubComp::new(pubrel.pkid()).write(&mut self.writer)?;
+            }
+            Packet::PubComp(_) => todo!(),
         }
 
         Ok(packet)
