@@ -11,6 +11,7 @@ use super::{
     connect::ConnAck,
     header::FixedHeader,
     publish::{PubAck, PubComp, PubRec, PubRel, PublishRef},
+    subscribe::SubAckRef,
     Decode, DecodePacket,
 };
 
@@ -25,10 +26,12 @@ pub enum Packet<'a> {
     PubAck(PubAck),
     /// PUBREC from the Server after a PUBLISH with QoS 2.
     PubRec(PubRec),
-    /// A PUBREL Packet is the response to a PUBREC Packet.
+    /// A PUBREL packet is the response to a PUBREC packet.
     PubRel(PubRel),
-    /// The PUBCOMP Packet is the response to a PUBREL Packet.
+    /// The PUBCOMP packet is the response to a PUBREL packet.
     PubComp(PubComp),
+    /// A SUBACK packet is the response to a SUBSCRIBE packet.
+    SubAck(SubAckRef<'a>),
 }
 
 impl<'a> Packet<'a> {
@@ -63,12 +66,11 @@ impl<'a> Packet<'a> {
             ControlPacketType::PubRec => Self::parse_packet::<PubRec>(header, bytes),
             ControlPacketType::PubRel => Self::parse_packet::<PubRel>(header, bytes),
             ControlPacketType::PubComp => Self::parse_packet::<PubComp>(header, bytes),
-            ControlPacketType::Subscribe => {
+            ControlPacketType::SubAck => Self::parse_packet::<SubAckRef>(header, bytes),
+            ControlPacketType::Subscribe | ControlPacketType::Unsubscribe => {
                 // The Subscribe is only sent from the Client to the Server
                 Err(DecodeError::Reserved)
             }
-            ControlPacketType::SubAck => todo!(),
-            ControlPacketType::Unsubscribe => todo!(),
             ControlPacketType::UnsubAck => todo!(),
             ControlPacketType::PingReq => todo!(),
             ControlPacketType::PingResp => todo!(),
@@ -191,6 +193,7 @@ impl<'a> Display for Packet<'a> {
             Packet::PubRec(value) => Display::fmt(value, f),
             Packet::PubRel(value) => Display::fmt(value, f),
             Packet::PubComp(value) => Display::fmt(value, f),
+            Packet::SubAck(value) => Display::fmt(value, f),
         }
     }
 }
@@ -242,5 +245,11 @@ impl<'a> From<PubRel> for Packet<'a> {
 impl<'a> From<PubComp> for Packet<'a> {
     fn from(v: PubComp) -> Self {
         Self::PubComp(v)
+    }
+}
+
+impl<'a> From<SubAckRef<'a>> for Packet<'a> {
+    fn from(value: SubAckRef<'a>) -> Self {
+        Self::SubAck(value)
     }
 }

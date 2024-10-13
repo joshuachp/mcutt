@@ -1,6 +1,10 @@
 //! Handle subscribing to topics through the SUBSCRIBE packet.
 
-use core::{fmt::Display, ops::Deref};
+use core::{
+    fmt::Display,
+    ops::Deref,
+    slice::{self},
+};
 
 use iter::{Iter, SubAckCodeIter};
 
@@ -15,6 +19,9 @@ use super::{
 #[cfg(feature = "alloc")]
 pub mod alloc;
 pub mod iter;
+
+/// Reference to a [`Subscribe`] packet.
+pub type SubscribeRef<'a> = Subscribe<SubscribeCursor<'a>>;
 
 /// The SUBSCRIBE Packet is sent from the Client to the Server to create one or more Subscriptions.
 ///
@@ -37,17 +44,17 @@ impl<I> Subscribe<I> {
     }
 }
 
-impl<'a, I, S> IntoIterator for &'a Subscribe<I>
+impl<'a, S, I> IntoIterator for &'a Subscribe<I>
 where
     &'a I: IntoIterator<Item = &'a SubscribeTopic<S>>,
     S: Deref<Target = str> + 'a,
 {
     type Item = SubscribeTopic<&'a str>;
 
-    type IntoIter = Iter<'a, <&'a I as IntoIterator>::IntoIter>;
+    type IntoIter = Iter<<&'a I as IntoIterator>::IntoIter>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Iter::new(self.filters.into_iter())
+        Iter::new(&self.filters)
     }
 }
 
@@ -86,7 +93,7 @@ where
     }
 }
 
-impl<'a> DecodePacket<'a> for Subscribe<SubscribeCursor<'a>> {
+impl<'a> DecodePacket<'a> for SubscribeRef<'a> {
     fn packet_type() -> ControlPacketType {
         ControlPacketType::Subscribe
     }
@@ -235,7 +242,7 @@ impl<'a> DecodeCursor<'a> for SubscribeCursor<'a> {
     type Item = SubscribeTopic<&'a str>;
 }
 
-impl<'a> IntoIterator for &'a SubscribeCursor<'a> {
+impl<'a> IntoIterator for &'a SubscribeCursor<'_> {
     type Item = SubscribeTopic<&'a str>;
 
     type IntoIter = CursorIter<'a, SubscribeCursor<'a>>;
@@ -263,6 +270,9 @@ where
     }
 }
 
+/// Reference to a [`SubAck`] packet.
+pub type SubAckRef<'a> = SubAck<SubAckCodeCursor<'a>>;
+
 /// A SUBACK Packet is sent by the Server to the Client to confirm receipt and processing of a
 /// SUBSCRIBE Packet.
 ///
@@ -283,16 +293,23 @@ impl<I> SubAck<I> {
     }
 }
 
-impl<'a, I> IntoIterator for &'a SubAck<I>
-where
-    &'a I: IntoIterator<Item = &'a SubAckCode>,
-{
+impl<'a, const N: usize> IntoIterator for &'a SubAck<[SubAckCode; N]> {
     type Item = SubAckCode;
 
-    type IntoIter = core::iter::Copied<<&'a I as IntoIterator>::IntoIter>;
+    type IntoIter = core::iter::Copied<slice::Iter<'a, SubAckCode>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.return_codes.into_iter().copied()
+        self.return_codes.iter().copied()
+    }
+}
+
+impl<'a> IntoIterator for &'a SubAck<&'a [SubAckCode]> {
+    type Item = SubAckCode;
+
+    type IntoIter = core::iter::Copied<slice::Iter<'a, SubAckCode>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.return_codes.iter().copied()
     }
 }
 
@@ -470,7 +487,7 @@ pub struct SubAckCodeCursor<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> IntoIterator for &'a SubAckCodeCursor<'a> {
+impl<'a> IntoIterator for &'a SubAckCodeCursor<'_> {
     type Item = SubAckCode;
 
     type IntoIter = SubAckCodeIter<'a>;
@@ -544,8 +561,7 @@ mod tests {
 
         assert_eq!(writer.buf, exp_bytes);
 
-        let (sub, bytes): (Subscribe<SubscribeCursor>, _) =
-            DecodePacket::parse(&writer.buf).unwrap();
+        let (sub, bytes) = <SubscribeRef as DecodePacket>::parse(&writer.buf).unwrap();
 
         assert!(bytes.is_empty());
 

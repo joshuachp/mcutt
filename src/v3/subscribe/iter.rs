@@ -1,27 +1,27 @@
 //! Iterators over a [`Subscribe`](super::Subscribe) filters.
 
-use core::{marker::PhantomData, ops::Deref, slice};
+use core::{ops::Deref, slice};
 
 use super::{SubAckCode, SubAckCodeCursor, SubscribeTopic};
 
 /// Iterator over the [`Subscribe`](super::Subscribe) filters
 #[derive(Debug, Clone, Copy)]
-pub struct Iter<'a, I: 'a> {
+pub struct Iter<I> {
     iter: I,
-    // Marker to capture a lifetime iterator items
-    _marker: PhantomData<&'a ()>,
 }
 
-impl<'a, I: 'a> Iter<'a, I> {
-    pub(crate) fn new(iter: I) -> Self {
+impl<I> Iter<I> {
+    pub(crate) fn new<T>(into: T) -> Self
+    where
+        T: IntoIterator<IntoIter = I>,
+    {
         Self {
-            iter,
-            _marker: PhantomData,
+            iter: into.into_iter(),
         }
     }
 }
 
-impl<'a, I, S> Iterator for Iter<'a, I>
+impl<'a, I, S> Iterator for Iter<I>
 where
     I: Iterator<Item = &'a SubscribeTopic<S>>,
     S: Deref<Target = str> + 'a,
@@ -40,7 +40,7 @@ pub struct SubAckCodeIter<'a> {
 }
 
 impl<'a> SubAckCodeIter<'a> {
-    pub(crate) fn new(cursor: &'a SubAckCodeCursor<'a>) -> Self {
+    pub(crate) fn new(cursor: &'a SubAckCodeCursor<'_>) -> Self {
         Self {
             iter: cursor.bytes.iter(),
         }

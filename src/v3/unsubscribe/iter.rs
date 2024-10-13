@@ -1,27 +1,27 @@
 //! Iterators over a [`Unsubscribe`](super::Unsubscribe) filters.
 
-use core::{marker::PhantomData, ops::Deref};
+use core::ops::Deref;
 
 use super::UnsubscribeTopic;
 
 /// Iterator over the [`Unsubscribe`](super::Unsubscribe) filters
 #[derive(Debug, Clone, Copy)]
-pub struct Iter<'a, I: 'a> {
+pub struct Iter<I> {
     iter: I,
-    // Marker to capture a lifetime iterator items
-    _marker: PhantomData<&'a ()>,
 }
 
-impl<'a, I: 'a> Iter<'a, I> {
-    pub(crate) fn new(iter: I) -> Self {
+impl<'a, I: 'a> Iter<I> {
+    pub(crate) fn new<T>(into: T) -> Self
+    where
+        T: IntoIterator<IntoIter = I>,
+    {
         Self {
-            iter,
-            _marker: PhantomData,
+            iter: into.into_iter(),
         }
     }
 }
 
-impl<'a, I, S> Iterator for Iter<'a, I>
+impl<'a, I, S> Iterator for Iter<I>
 where
     I: Iterator<Item = &'a UnsubscribeTopic<S>>,
     S: Deref<Target = str> + 'a,

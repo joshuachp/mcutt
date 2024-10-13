@@ -42,10 +42,10 @@ where
 {
     type Item = UnsubscribeTopic<&'a str>;
 
-    type IntoIter = Iter<'a, <&'a I as IntoIterator>::IntoIter>;
+    type IntoIter = Iter<<&'a I as IntoIterator>::IntoIter>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Iter::new(self.filters.into_iter())
+        Iter::new(&self.filters)
     }
 }
 
@@ -222,7 +222,7 @@ impl<'a> DecodeCursor<'a> for UnsubscribeCursor<'a> {
     type Item = UnsubscribeTopic<&'a str>;
 }
 
-impl<'a> IntoIterator for &'a UnsubscribeCursor<'a> {
+impl<'a> IntoIterator for &'a UnsubscribeCursor<'_> {
     type Item = UnsubscribeTopic<&'a str>;
 
     type IntoIter = CursorIter<'a, UnsubscribeCursor<'a>>;

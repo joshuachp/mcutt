@@ -347,6 +347,7 @@ impl<'c> Connection<'c> {
                 PubComp::new(pubrel.pkid()).write(&mut self.writer)?;
             }
             Packet::PubComp(_) => todo!(),
+            Packet::SubAck(_) => todo!(),
         }
 
         Ok(packet)
