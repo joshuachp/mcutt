@@ -12,6 +12,7 @@ use super::{
     header::FixedHeader,
     publish::{PubAck, PubComp, PubRec, PubRel, PublishRef},
     subscribe::SubAckRef,
+    unsubscribe::UnsubAck,
     Decode, DecodePacket,
 };
 
@@ -32,6 +33,8 @@ pub enum Packet<'a> {
     PubComp(PubComp),
     /// A SUBACK packet is the response to a SUBSCRIBE packet.
     SubAck(SubAckRef<'a>),
+    /// A UNSUBACK packet is the response to a UNSUBSCRIBE packet.
+    UnsubAck(UnsubAck),
 }
 
 impl<'a> Packet<'a> {
@@ -194,6 +197,7 @@ impl<'a> Display for Packet<'a> {
             Packet::PubRel(value) => Display::fmt(value, f),
             Packet::PubComp(value) => Display::fmt(value, f),
             Packet::SubAck(value) => Display::fmt(value, f),
+            Packet::UnsubAck(value) => Display::fmt(value, f),
         }
     }
 }

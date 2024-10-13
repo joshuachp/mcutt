@@ -5,7 +5,7 @@ use core::{fmt::Display, ops::Deref};
 use iter::Iter;
 
 use super::{
-    header::{ControlPacketType, PacketId, Str, StrRef, TypeFlags},
+    header::{ControlPacketType, PacketId, RemainingLength, Str, StrRef, TypeFlags},
     CursorIter, Decode, DecodeCursor, DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
 };
 
@@ -250,6 +250,77 @@ where
     }
 }
 
+/// The UNSUBACK Packet is sent by the Server to the Client to confirm receipt of an UNSUBSCRIBE
+/// Packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsubAck {
+    pkid: PacketId,
+}
+
+impl UnsubAck {
+    const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
+
+    /// Returns the packet identifier of the packet.
+    pub fn pkid(&self) -> PacketId {
+        self.pkid
+    }
+}
+
+impl Display for UnsubAck {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} pkid({})", ControlPacketType::SubAck, self.pkid)
+    }
+}
+
+impl EncodePacket for UnsubAck {
+    fn remaining_len(&self) -> usize {
+        self.pkid.encode_len()
+    }
+
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::UnsubAck
+    }
+
+    fn packet_flags(&self) -> TypeFlags {
+        TypeFlags::empty()
+    }
+
+    fn write_packet<W>(&self, writer: &mut W) -> Result<usize, EncodeError<W::Err>>
+    where
+        W: super::Writer,
+    {
+        self.pkid.write(writer)
+    }
+}
+
+impl<'a> DecodePacket<'a> for UnsubAck {
+    fn packet_type() -> ControlPacketType {
+        ControlPacketType::UnsubAck
+    }
+
+    fn fixed_remaining_length() -> Option<RemainingLength> {
+        Some(Self::REMAINING_LENGTH)
+    }
+
+    fn parse_with_header(
+        header: super::header::FixedHeader,
+        bytes: &'a [u8],
+    ) -> Result<Self, DecodeError> {
+        if !header.flags().is_empty() {
+            return Err(DecodeError::Reserved);
+        }
+
+        let (pkid, bytes) = PacketId::parse(bytes)?;
+
+        debug_assert!(
+            bytes.is_empty(),
+            "BUG: remaining length was correct, but bytes are still present after parsing"
+        );
+
+        Ok(Self { pkid })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -281,16 +352,16 @@ mod tests {
             0b1010_0010u8,
             12,
             // pkid
-            0b00000000,
-            0b00001010,
+            0b0000_0000,
+            0b0000_1010,
             // filters
-            0b00000000,
-            0b00000011,
+            0b0000_0000,
+            0b0000_0011,
             b'a',
             b'/',
             b'b',
-            0b00000000,
-            0b00000011,
+            0b0000_0000,
+            0b0000_0011,
             b'c',
             b'/',
             b'd',
@@ -303,5 +374,25 @@ mod tests {
         assert!(bytes.is_empty());
 
         assert_eq!(sub, packet);
+    }
+
+    #[test]
+    fn should_encode_and_decode_unsuback() {
+        let unsuback = UnsubAck {
+            pkid: PacketId::try_from(42u16).unwrap(),
+        };
+
+        let exp_bytes = [0b1011_0000u8, 0b0000_0010, 0b0000_0000, 0b0010_1010];
+
+        let mut writer = TestWriter::new();
+
+        unsuback.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (packet, bytes) = <UnsubAck as DecodePacket>::parse(&exp_bytes).unwrap();
+
+        assert!(bytes.is_empty());
+        assert_eq!(packet, unsuback);
     }
 }
