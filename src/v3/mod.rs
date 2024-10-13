@@ -1,6 +1,6 @@
 //! Data representation of MQTT packets
 
-use core::fmt::Display;
+use core::{fmt::Display, ops::Deref};
 
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -18,6 +18,7 @@ pub mod header;
 pub mod packet;
 pub mod publish;
 pub mod subscribe;
+pub mod unsubscribe;
 
 /// The default maximum packet size permitted by the spec.
 ///
@@ -75,8 +76,8 @@ pub enum DecodeError {
     PublishTopic(TopicError),
     /// Not all bytes consumed in the packet
     RemainingBytes,
-    /// A [`Subscribe`](subscribe::Subscribe) packet must have at least one topic filter.
-    EmptySubscribe,
+    /// The packet must contain at leas one topic.
+    EmptyTopics,
 }
 
 impl DecodeError {
@@ -104,7 +105,7 @@ impl DecodeError {
             | DecodeError::Reserved
             | DecodeError::PublishTopic(_)
             | DecodeError::RemainingBytes
-            | DecodeError::EmptySubscribe => true,
+            | DecodeError::EmptyTopics => true,
         }
     }
 }
@@ -146,8 +147,8 @@ impl Display for DecodeError {
             DecodeError::RemainingBytes => {
                 write!(f, "not all the bytes in the packet were consumed")
             }
-            DecodeError::EmptySubscribe => {
-                write!(f, "a subscribe packet must have at leaset one topic filter")
+            DecodeError::EmptyTopics => {
+                write!(f, "the packet must contain at least one topic filter")
             }
         }
     }
@@ -165,7 +166,7 @@ impl Error for DecodeError {
             | DecodeError::MismatchedPacketType { .. }
             | DecodeError::Reserved
             | DecodeError::RemainingBytes
-            | DecodeError::EmptySubscribe => None,
+            | DecodeError::EmptyTopics => None,
             DecodeError::PacketIdentifier(err) => Some(err),
             DecodeError::Str(err) => Some(err),
             DecodeError::RemainingLength(err) => Some(err),
@@ -266,6 +267,52 @@ where
 {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         <T as DecodePacket>::parse(bytes)
+    }
+}
+
+/// Trait used in the cursor to associate the returned topic type.
+pub trait DecodeCursor<'a>: Deref<Target = [u8]> {
+    /// Type to return while iterating the cursor.
+    type Item: Decode<'a>;
+}
+
+/// Iterator of
+#[derive(Debug, Clone, Copy)]
+pub struct CursorIter<'a, T> {
+    cursor: &'a T,
+    idx: usize,
+}
+
+impl<'a, T> CursorIter<'a, T> {
+    pub(crate) fn new(cursor: &'a T) -> Self {
+        Self { cursor, idx: 0 }
+    }
+}
+
+impl<'a, T> Iterator for CursorIter<'a, T>
+where
+    T: DecodeCursor<'a>,
+{
+    type Item = T::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == self.cursor.len() {
+            return None;
+        }
+
+        let bytes = &self.cursor.get(self.idx..)?;
+
+        let (filter, bytes) = match T::Item::parse(bytes) {
+            Ok(res) => res,
+            Err(err) => {
+                // We checked the validity during construction of the cursor
+                unreachable!("the cursor must be a valid filter: {err}")
+            }
+        };
+
+        self.idx = self.cursor.len().saturating_sub(bytes.len());
+
+        Some(filter)
     }
 }
 

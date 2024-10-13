@@ -2,9 +2,7 @@
 
 use core::{marker::PhantomData, ops::Deref, slice};
 
-use crate::v3::Decode;
-
-use super::{FilterCursor, ReturnCode, ReturnCodeCursor, TopicFilter};
+use super::{SubAckCode, SubAckCodeCursor, SubscribeTopic};
 
 /// Iterator over the [`Subscribe`](super::Subscribe) filters
 #[derive(Debug, Clone, Copy)]
@@ -25,69 +23,32 @@ impl<'a, I: 'a> Iter<'a, I> {
 
 impl<'a, I, S> Iterator for Iter<'a, I>
 where
-    I: Iterator<Item = &'a TopicFilter<S>>,
+    I: Iterator<Item = &'a SubscribeTopic<S>>,
     S: Deref<Target = str> + 'a,
 {
-    type Item = TopicFilter<&'a str>;
+    type Item = SubscribeTopic<&'a str>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|topic| topic.into())
     }
 }
 
-/// Iterator of the [`TopicFilter`] for the [`FilterCursor`]
-#[derive(Debug, Clone, Copy)]
-pub struct FilterIter<'a> {
-    cursor: &'a FilterCursor<'a>,
-    idx: usize,
-}
-
-impl<'a> FilterIter<'a> {
-    pub(crate) fn new(cursor: &'a FilterCursor<'a>) -> Self {
-        Self { cursor, idx: 0 }
-    }
-}
-
-impl<'a> Iterator for FilterIter<'a> {
-    type Item = TopicFilter<&'a str>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx == self.cursor.bytes.len() {
-            return None;
-        }
-
-        let bytes = &self.cursor.bytes[self.idx..];
-
-        let (filter, bytes) = match TopicFilter::parse(bytes) {
-            Ok(res) => res,
-            Err(err) => {
-                // We checked the validity during construction of the cursor
-                unreachable!("the cursor must be a valid filter: {err}")
-            }
-        };
-
-        self.idx = self.cursor.bytes.len().saturating_sub(bytes.len());
-
-        Some(filter)
-    }
-}
-
-/// Iterator of the [`ReturnCode`] for the [`ReturnCodeCursor`]
+/// Iterator of the [`SubAckCode`] for the [`SubAckCodeCursor`]
 #[derive(Debug, Clone)]
-pub struct ReturnCodeIter<'a> {
+pub struct SubAckCodeIter<'a> {
     iter: slice::Iter<'a, u8>,
 }
 
-impl<'a> ReturnCodeIter<'a> {
-    pub(crate) fn new(cursor: &'a ReturnCodeCursor<'a>) -> Self {
+impl<'a> SubAckCodeIter<'a> {
+    pub(crate) fn new(cursor: &'a SubAckCodeCursor<'a>) -> Self {
         Self {
             iter: cursor.bytes.iter(),
         }
     }
 }
 
-impl<'a> Iterator for ReturnCodeIter<'a> {
-    type Item = ReturnCode;
+impl<'a> Iterator for SubAckCodeIter<'a> {
+    type Item = SubAckCode;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.iter.next()?;
@@ -113,14 +74,14 @@ impl<'a> Iterator for ReturnCodeIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for ReturnCodeIter<'a> {
+impl<'a> ExactSizeIterator for SubAckCodeIter<'a> {
     fn len(&self) -> usize {
         self.iter.len()
     }
 }
 
-fn unwrap_return_code(next: &u8) -> Option<ReturnCode> {
-    match ReturnCode::try_from(*next) {
+fn unwrap_return_code(next: &u8) -> Option<SubAckCode> {
+    match SubAckCode::try_from(*next) {
         Ok(code) => Some(code),
         Err(err) => {
             // We checked the validity during construction of the cursor

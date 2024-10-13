@@ -4,26 +4,26 @@ use core::ops::Deref;
 
 use alloc::{string::String, vec::Vec};
 
-use super::{FilterCursor, TopicFilter};
+use super::{SubscribeCursor, SubscribeTopic};
 
-impl<'a> FilterCursor<'a> {
+impl<'a> SubscribeCursor<'a> {
     /// Converts the filter to an owned value.
-    pub fn to_vec(&self) -> Vec<TopicFilter<String>> {
+    pub fn to_vec(&self) -> Vec<SubscribeTopic<String>> {
         self.into_iter().map(|f| f.into()).collect()
     }
 }
 
-impl<'a, S> PartialEq<Vec<TopicFilter<S>>> for FilterCursor<'a>
+impl<'a, S> PartialEq<Vec<SubscribeTopic<S>>> for SubscribeCursor<'a>
 where
     S: Deref<Target = str>,
 {
-    fn eq(&self, other: &Vec<TopicFilter<S>>) -> bool {
+    fn eq(&self, other: &Vec<SubscribeTopic<S>>) -> bool {
         self.into_iter().eq(other.iter().map(|s| s.into()))
     }
 }
 
-impl<'a> From<TopicFilter<&'a str>> for TopicFilter<String> {
-    fn from(value: TopicFilter<&'a str>) -> Self {
+impl<'a> From<SubscribeTopic<&'a str>> for SubscribeTopic<String> {
+    fn from(value: SubscribeTopic<&'a str>) -> Self {
         Self {
             topic: value.topic.into(),
             qos: value.qos,

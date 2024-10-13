@@ -1,14 +1,15 @@
-//! Handle subscribing to topics through the subscribe packet.
+//! Handle subscribing to topics through the SUBSCRIBE packet.
 
 use core::{fmt::Display, ops::Deref};
 
-use iter::{FilterIter, Iter, ReturnCodeIter};
+use iter::{Iter, SubAckCodeIter};
 
 use crate::{bytes::read_u8, v3::header::ControlPacketType};
 
 use super::{
     header::{PacketId, Str, StrRef, TypeFlags},
-    Decode, DecodeError, DecodePacket, Encode, EncodeError, EncodePacket, Qos,
+    CursorIter, Decode, DecodeCursor, DecodeError, DecodePacket, Encode, EncodeError, EncodePacket,
+    Qos,
 };
 
 #[cfg(feature = "alloc")]
@@ -38,10 +39,10 @@ impl<I> Subscribe<I> {
 
 impl<'a, I, S> IntoIterator for &'a Subscribe<I>
 where
-    &'a I: IntoIterator<Item = &'a TopicFilter<S>>,
+    &'a I: IntoIterator<Item = &'a SubscribeTopic<S>>,
     S: Deref<Target = str> + 'a,
 {
-    type Item = TopicFilter<&'a str>;
+    type Item = SubscribeTopic<&'a str>;
 
     type IntoIter = Iter<'a, <&'a I as IntoIterator>::IntoIter>;
 
@@ -52,7 +53,7 @@ where
 
 impl<I> EncodePacket for Subscribe<I>
 where
-    for<'a> &'a Self: IntoIterator<Item = TopicFilter<&'a str>>,
+    for<'a> &'a Self: IntoIterator<Item = SubscribeTopic<&'a str>>,
 {
     fn remaining_len(&self) -> usize {
         let filters = self
@@ -85,7 +86,7 @@ where
     }
 }
 
-impl<'a> DecodePacket<'a> for Subscribe<FilterCursor<'a>> {
+impl<'a> DecodePacket<'a> for Subscribe<SubscribeCursor<'a>> {
     fn packet_type() -> ControlPacketType {
         ControlPacketType::Subscribe
     }
@@ -101,14 +102,14 @@ impl<'a> DecodePacket<'a> for Subscribe<FilterCursor<'a>> {
         let (pkid, mut bytes) = PacketId::parse(bytes)?;
 
         if bytes.is_empty() {
-            return Err(DecodeError::EmptySubscribe);
+            return Err(DecodeError::EmptyTopics);
         }
 
-        let filters = FilterCursor { bytes };
+        let filters = SubscribeCursor { bytes };
 
         // Check the remaining bytes are a valid packet filter
         while !bytes.is_empty() {
-            let (_, rest) = TopicFilter::parse(bytes)?;
+            let (_, rest) = SubscribeTopic::parse(bytes)?;
 
             bytes = rest;
         }
@@ -152,7 +153,7 @@ where
 ///
 /// The server may or may not support wild card characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TopicFilter<S> {
+pub struct SubscribeTopic<S> {
     /// The Topic to subscribe.
     topic: Str<S>,
     /// Requested QoS for the topic.
@@ -161,7 +162,7 @@ pub struct TopicFilter<S> {
     qos: Qos,
 }
 
-impl<S> Encode for TopicFilter<S>
+impl<S> Encode for SubscribeTopic<S>
 where
     S: Deref<Target = str>,
 {
@@ -183,7 +184,7 @@ where
     }
 }
 
-impl<'a> Decode<'a> for TopicFilter<&'a str> {
+impl<'a> Decode<'a> for SubscribeTopic<&'a str> {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), super::DecodeError> {
         let (topic, bytes) = Str::parse(bytes)?;
 
@@ -191,11 +192,11 @@ impl<'a> Decode<'a> for TopicFilter<&'a str> {
 
         let qos = Qos::try_from(qos).map_err(|_| DecodeError::Reserved)?;
 
-        Ok((TopicFilter { topic, qos }, bytes))
+        Ok((SubscribeTopic { topic, qos }, bytes))
     }
 }
 
-impl<S> Display for TopicFilter<S>
+impl<S> Display for SubscribeTopic<S>
 where
     S: Display,
 {
@@ -204,11 +205,11 @@ where
     }
 }
 
-impl<'a, S> From<&'a TopicFilter<S>> for TopicFilter<&'a str>
+impl<'a, S> From<&'a SubscribeTopic<S>> for SubscribeTopic<&'a str>
 where
     S: Deref<Target = str>,
 {
-    fn from(value: &'a TopicFilter<S>) -> Self {
+    fn from(value: &'a SubscribeTopic<S>) -> Self {
         Self {
             topic: StrRef::from(&value.topic),
             qos: value.qos,
@@ -216,36 +217,48 @@ where
     }
 }
 
-/// Cursor to iterator over the [`TopicFilter`] encoded in a buffer.
+/// Cursor to iterator over the [`SubscribeTopic`] encoded in a buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FilterCursor<'a> {
+pub struct SubscribeCursor<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> IntoIterator for &'a FilterCursor<'a> {
-    type Item = TopicFilter<&'a str>;
+impl<'a> Deref for SubscribeCursor<'a> {
+    type Target = [u8];
 
-    type IntoIter = FilterIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        FilterIter::new(self)
+    fn deref(&self) -> &Self::Target {
+        self.bytes
     }
 }
 
-impl<'a, const N: usize, S> PartialEq<[TopicFilter<S>; N]> for FilterCursor<'a>
+impl<'a> DecodeCursor<'a> for SubscribeCursor<'a> {
+    type Item = SubscribeTopic<&'a str>;
+}
+
+impl<'a> IntoIterator for &'a SubscribeCursor<'a> {
+    type Item = SubscribeTopic<&'a str>;
+
+    type IntoIter = CursorIter<'a, SubscribeCursor<'a>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        CursorIter::new(self)
+    }
+}
+
+impl<'a, const N: usize, S> PartialEq<[SubscribeTopic<S>; N]> for SubscribeCursor<'a>
 where
     S: Deref<Target = str>,
 {
-    fn eq(&self, other: &[TopicFilter<S>; N]) -> bool {
+    fn eq(&self, other: &[SubscribeTopic<S>; N]) -> bool {
         self.into_iter().eq(other.iter().map(|s| s.into()))
     }
 }
 
-impl<'a, S> PartialEq<[TopicFilter<S>]> for FilterCursor<'a>
+impl<'a, S> PartialEq<[SubscribeTopic<S>]> for SubscribeCursor<'a>
 where
     S: Deref<Target = str>,
 {
-    fn eq(&self, other: &[TopicFilter<S>]) -> bool {
+    fn eq(&self, other: &[SubscribeTopic<S>]) -> bool {
         self.into_iter().eq(other.iter().map(|s| s.into()))
     }
 }
@@ -272,9 +285,9 @@ impl<I> SubAck<I> {
 
 impl<'a, I> IntoIterator for &'a SubAck<I>
 where
-    &'a I: IntoIterator<Item = &'a ReturnCode>,
+    &'a I: IntoIterator<Item = &'a SubAckCode>,
 {
-    type Item = ReturnCode;
+    type Item = SubAckCode;
 
     type IntoIter = core::iter::Copied<<&'a I as IntoIterator>::IntoIter>;
 
@@ -285,7 +298,7 @@ where
 
 impl<I> EncodePacket for SubAck<I>
 where
-    for<'a> &'a Self: IntoIterator<Item = ReturnCode>,
+    for<'a> &'a Self: IntoIterator<Item = SubAckCode>,
 {
     fn remaining_len(&self) -> usize {
         let return_codes = self
@@ -318,7 +331,7 @@ where
     }
 }
 
-impl<'a> DecodePacket<'a> for SubAck<ReturnCodeCursor<'a>> {
+impl<'a> DecodePacket<'a> for SubAck<SubAckCodeCursor<'a>> {
     fn packet_type() -> ControlPacketType {
         ControlPacketType::SubAck
     }
@@ -334,14 +347,14 @@ impl<'a> DecodePacket<'a> for SubAck<ReturnCodeCursor<'a>> {
         let (pkid, mut bytes) = PacketId::parse(bytes)?;
 
         if bytes.is_empty() {
-            return Err(DecodeError::EmptySubscribe);
+            return Err(DecodeError::EmptyTopics);
         }
 
-        let return_codes = ReturnCodeCursor { bytes };
+        let return_codes = SubAckCodeCursor { bytes };
 
         // Check the remaining bytes are a valid packet filter
         while !bytes.is_empty() {
-            let (_, rest) = ReturnCode::parse(bytes)?;
+            let (_, rest) = SubAckCode::parse(bytes)?;
 
             bytes = rest;
         }
@@ -384,7 +397,7 @@ where
 /// Return code for a SUBACK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum ReturnCode {
+pub enum SubAckCode {
     /// Success with a maximum QoS of 0.
     Qos0 = 0b0000_0000,
     /// Success with a maximum QoS of 1.
@@ -395,40 +408,40 @@ pub enum ReturnCode {
     Failure = 0b1000_0000,
 }
 
-impl Display for ReturnCode {
+impl Display for SubAckCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s = match self {
-            ReturnCode::Qos0 => "qos0",
-            ReturnCode::Qos1 => "qos1",
-            ReturnCode::Qos2 => "qos2",
-            ReturnCode::Failure => "failure",
+            SubAckCode::Qos0 => "qos0",
+            SubAckCode::Qos1 => "qos1",
+            SubAckCode::Qos2 => "qos2",
+            SubAckCode::Failure => "failure",
         };
 
         write!(f, "{s}")
     }
 }
 
-impl From<ReturnCode> for u8 {
-    fn from(value: ReturnCode) -> Self {
+impl From<SubAckCode> for u8 {
+    fn from(value: SubAckCode) -> Self {
         value as u8
     }
 }
 
-impl TryFrom<u8> for ReturnCode {
+impl TryFrom<u8> for SubAckCode {
     type Error = DecodeError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0b0000_0000 => Ok(ReturnCode::Qos0),
-            0b0000_0001 => Ok(ReturnCode::Qos1),
-            0b0000_0010 => Ok(ReturnCode::Qos2),
-            0b1000_0000 => Ok(ReturnCode::Failure),
+            0b0000_0000 => Ok(SubAckCode::Qos0),
+            0b0000_0001 => Ok(SubAckCode::Qos1),
+            0b0000_0010 => Ok(SubAckCode::Qos2),
+            0b1000_0000 => Ok(SubAckCode::Failure),
             _ => Err(DecodeError::Reserved),
         }
     }
 }
 
-impl Encode for ReturnCode {
+impl Encode for SubAckCode {
     fn encode_len(&self) -> usize {
         1
     }
@@ -441,40 +454,40 @@ impl Encode for ReturnCode {
     }
 }
 
-impl<'a> Decode<'a> for ReturnCode {
+impl<'a> Decode<'a> for SubAckCode {
     fn parse(bytes: &'a [u8]) -> Result<(Self, &'a [u8]), DecodeError> {
         let (code, bytes) = read_u8(bytes)?;
 
-        let code = ReturnCode::try_from(code)?;
+        let code = SubAckCode::try_from(code)?;
 
         Ok((code, bytes))
     }
 }
 
-/// Cursor to iterator over the [`ReturnCode`] encoded in a buffer.
+/// Cursor to iterator over the [`SubAckCode`] encoded in a buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReturnCodeCursor<'a> {
+pub struct SubAckCodeCursor<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> IntoIterator for &'a ReturnCodeCursor<'a> {
-    type Item = ReturnCode;
+impl<'a> IntoIterator for &'a SubAckCodeCursor<'a> {
+    type Item = SubAckCode;
 
-    type IntoIter = ReturnCodeIter<'a>;
+    type IntoIter = SubAckCodeIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        ReturnCodeIter::new(self)
+        SubAckCodeIter::new(self)
     }
 }
 
-impl<'a, const N: usize> PartialEq<[ReturnCode; N]> for ReturnCodeCursor<'a> {
-    fn eq(&self, other: &[ReturnCode; N]) -> bool {
+impl<'a, const N: usize> PartialEq<[SubAckCode; N]> for SubAckCodeCursor<'a> {
+    fn eq(&self, other: &[SubAckCode; N]) -> bool {
         self.into_iter().eq(other.iter().copied())
     }
 }
 
-impl<'a> PartialEq<[ReturnCode]> for ReturnCodeCursor<'a> {
-    fn eq(&self, other: &[ReturnCode]) -> bool {
+impl<'a> PartialEq<[SubAckCode]> for SubAckCodeCursor<'a> {
+    fn eq(&self, other: &[SubAckCode]) -> bool {
         self.into_iter().eq(other.iter().copied())
     }
 }
@@ -494,11 +507,11 @@ mod tests {
         let packet = Subscribe {
             pkid: PacketId::try_from(10u16).unwrap(),
             filters: [
-                TopicFilter {
+                SubscribeTopic {
                     topic: Str::try_from("a/b").unwrap(),
                     qos: Qos::AtLeastOnce,
                 },
-                TopicFilter {
+                SubscribeTopic {
                     topic: Str::try_from("c/d").unwrap(),
                     qos: Qos::ExactlyOnce,
                 },
@@ -531,7 +544,8 @@ mod tests {
 
         assert_eq!(writer.buf, exp_bytes);
 
-        let (sub, bytes): (Subscribe<FilterCursor>, _) = DecodePacket::parse(&writer.buf).unwrap();
+        let (sub, bytes): (Subscribe<SubscribeCursor>, _) =
+            DecodePacket::parse(&writer.buf).unwrap();
 
         assert!(bytes.is_empty());
 
@@ -540,15 +554,15 @@ mod tests {
 
     #[test]
     fn should_iter_return_code_cursor() {
-        let cursor = ReturnCodeCursor {
+        let cursor = SubAckCodeCursor {
             bytes: &[0b0000_0000, 0b0000_0001, 0b0000_0010, 0b1000_0000],
         };
 
         let expected = [
-            ReturnCode::Qos0,
-            ReturnCode::Qos1,
-            ReturnCode::Qos2,
-            ReturnCode::Failure,
+            SubAckCode::Qos0,
+            SubAckCode::Qos1,
+            SubAckCode::Qos2,
+            SubAckCode::Failure,
         ];
 
         let mut iter = cursor.into_iter();
@@ -567,10 +581,10 @@ mod tests {
         let packet = SubAck {
             pkid: PacketId::try_from(10u16).unwrap(),
             return_codes: [
-                ReturnCode::Qos0,
-                ReturnCode::Qos1,
-                ReturnCode::Qos2,
-                ReturnCode::Failure,
+                SubAckCode::Qos0,
+                SubAckCode::Qos1,
+                SubAckCode::Qos2,
+                SubAckCode::Failure,
             ],
         };
 
@@ -592,7 +606,7 @@ mod tests {
 
         assert_eq!(writer.buf, exp_bytes);
 
-        let (sub, bytes): (SubAck<ReturnCodeCursor>, _) = DecodePacket::parse(&writer.buf).unwrap();
+        let (sub, bytes): (SubAck<SubAckCodeCursor>, _) = DecodePacket::parse(&writer.buf).unwrap();
 
         assert!(bytes.is_empty());
 
