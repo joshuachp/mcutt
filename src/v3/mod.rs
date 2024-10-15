@@ -14,6 +14,7 @@ use publish::TopicError;
 use crate::bytes::read_exact;
 
 pub mod connect;
+pub mod disconnect;
 pub mod header;
 pub mod packet;
 pub mod ping;

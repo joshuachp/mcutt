@@ -77,11 +77,11 @@ impl<'a> Packet<'a> {
             ControlPacketType::PingResp => Self::parse_packet::<PingResp>(header, bytes),
             ControlPacketType::Subscribe
             | ControlPacketType::Unsubscribe
-            | ControlPacketType::PingReq => {
+            | ControlPacketType::PingReq
+            | ControlPacketType::Disconnect => {
                 // The Subscribe is only sent from the Client to the Server
                 Err(DecodeError::Reserved)
             }
-            ControlPacketType::Disconnect => todo!(),
         }
     }
 

@@ -18,7 +18,7 @@ use super::{
 /// 2. Request that the Server responds to confirm that it is alive.
 /// 3. Exercise the network to indicate that the Network Connection is active.
 #[derive(Debug, Clone, Copy)]
-pub struct PingReq;
+pub struct PingReq {}
 
 impl PingReq {
     const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(0);
@@ -71,7 +71,7 @@ impl<'a> DecodePacket<'a> for PingReq {
             "BUG: remaining length was correct, but bytes are still present after parsing"
         );
 
-        Ok(PingReq)
+        Ok(PingReq {})
     }
 }
 
@@ -79,7 +79,7 @@ impl<'a> DecodePacket<'a> for PingReq {
 ///
 /// It indicates that the server is alive.
 #[derive(Debug, Clone, Copy)]
-pub struct PingResp;
+pub struct PingResp {}
 
 impl PingResp {
     const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(0);
@@ -132,7 +132,7 @@ impl<'a> DecodePacket<'a> for PingResp {
             "BUG: remaining length was correct, but bytes are still present after parsing"
         );
 
-        Ok(PingResp)
+        Ok(PingResp {})
     }
 }
 
@@ -150,7 +150,7 @@ mod tests {
 
         let mut writer = TestWriter::new();
 
-        PingReq.write(&mut writer).unwrap();
+        PingReq {}.write(&mut writer).unwrap();
 
         assert_eq!(writer.buf, exp_bytes);
 
@@ -165,11 +165,11 @@ mod tests {
 
         let mut writer = TestWriter::new();
 
-        PingResp.write(&mut writer).unwrap();
+        PingResp {}.write(&mut writer).unwrap();
 
         assert_eq!(writer.buf, exp_bytes);
 
-        let (_ping_req, bytes) = PingResp::parse(&exp_bytes).unwrap();
+        let (_ping_resp, bytes) = PingResp::parse(&exp_bytes).unwrap();
 
         assert!(bytes.is_empty());
     }
