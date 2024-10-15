@@ -16,6 +16,7 @@ use crate::bytes::read_exact;
 pub mod connect;
 pub mod header;
 pub mod packet;
+pub mod ping;
 pub mod publish;
 pub mod subscribe;
 pub mod unsubscribe;

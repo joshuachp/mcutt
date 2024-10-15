@@ -349,6 +349,7 @@ impl<'c> Connection<'c> {
             Packet::PubComp(_) => todo!(),
             Packet::SubAck(_) => todo!(),
             Packet::UnsubAck(_) => todo!(),
+            Packet::PingResp(_) => todo!(),
         }
 
         Ok(packet)

@@ -10,6 +10,7 @@ use crate::{
 use super::{
     connect::ConnAck,
     header::FixedHeader,
+    ping::PingResp,
     publish::{PubAck, PubComp, PubRec, PubRel, PublishRef},
     subscribe::SubAckRef,
     unsubscribe::UnsubAck,
@@ -19,7 +20,7 @@ use super::{
 /// Packets that can be received from a connection.
 #[derive(Debug, Clone, Copy)]
 pub enum Packet<'a> {
-    /// CONNACK packet, received after a connect.
+    /// CONNACK Packet, received after a connect.
     ConnAck(ConnAck),
     /// PUBLISH from the Server on a subscribed topic.
     Publish(PublishRef<'a>),
@@ -27,14 +28,16 @@ pub enum Packet<'a> {
     PubAck(PubAck),
     /// PUBREC from the Server after a PUBLISH with QoS 2.
     PubRec(PubRec),
-    /// A PUBREL packet is the response to a PUBREC packet.
+    /// A PUBREL Packet is the response to a PUBREC Packet.
     PubRel(PubRel),
-    /// The PUBCOMP packet is the response to a PUBREL packet.
+    /// The PUBCOMP Packet is the response to a PUBREL Packet.
     PubComp(PubComp),
-    /// A SUBACK packet is the response to a SUBSCRIBE packet.
+    /// A SUBACK Packet is the response to a SUBSCRIBE Packet.
     SubAck(SubAckRef<'a>),
-    /// A UNSUBACK packet is the response to a UNSUBSCRIBE packet.
+    /// A UNSUBACK Packet is the response to a UNSUBSCRIBE Packet.
     UnsubAck(UnsubAck),
+    /// A PINGRESP Packet is the response to a PINGREQ Packet.
+    PingResp(PingResp),
 }
 
 impl<'a> Packet<'a> {
@@ -70,13 +73,14 @@ impl<'a> Packet<'a> {
             ControlPacketType::PubRel => Self::parse_packet::<PubRel>(header, bytes),
             ControlPacketType::PubComp => Self::parse_packet::<PubComp>(header, bytes),
             ControlPacketType::SubAck => Self::parse_packet::<SubAckRef>(header, bytes),
-            ControlPacketType::Subscribe | ControlPacketType::Unsubscribe => {
+            ControlPacketType::UnsubAck => Self::parse_packet::<UnsubAck>(header, bytes),
+            ControlPacketType::PingResp => Self::parse_packet::<PingResp>(header, bytes),
+            ControlPacketType::Subscribe
+            | ControlPacketType::Unsubscribe
+            | ControlPacketType::PingReq => {
                 // The Subscribe is only sent from the Client to the Server
                 Err(DecodeError::Reserved)
             }
-            ControlPacketType::UnsubAck => todo!(),
-            ControlPacketType::PingReq => todo!(),
-            ControlPacketType::PingResp => todo!(),
             ControlPacketType::Disconnect => todo!(),
         }
     }
@@ -198,6 +202,7 @@ impl<'a> Display for Packet<'a> {
             Packet::PubComp(value) => Display::fmt(value, f),
             Packet::SubAck(value) => Display::fmt(value, f),
             Packet::UnsubAck(value) => Display::fmt(value, f),
+            Packet::PingResp(value) => Display::fmt(value, f),
         }
     }
 }
@@ -255,5 +260,17 @@ impl<'a> From<PubComp> for Packet<'a> {
 impl<'a> From<SubAckRef<'a>> for Packet<'a> {
     fn from(value: SubAckRef<'a>) -> Self {
         Self::SubAck(value)
+    }
+}
+
+impl<'a> From<UnsubAck> for Packet<'a> {
+    fn from(value: UnsubAck) -> Self {
+        Self::UnsubAck(value)
+    }
+}
+
+impl<'a> From<PingResp> for Packet<'a> {
+    fn from(value: PingResp) -> Self {
+        Self::PingResp(value)
     }
 }
