@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// Error for an invalid [`RemainingLength`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum RemainingLengthError {
     /// The value is greater than the [`max`](RemainingLength::MAX)
@@ -362,5 +362,12 @@ mod tests {
             assert_eq!(written, exp.len());
             assert_eq!(&buf.buf, exp);
         }
+    }
+
+    #[test]
+    fn should_check_too_big() {
+        let err = RemainingLength::try_from(u32::MAX).unwrap_err();
+
+        assert_eq!(err, RemainingLengthError::Max { value: u32::MAX });
     }
 }

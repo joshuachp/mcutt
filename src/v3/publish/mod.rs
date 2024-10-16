@@ -68,6 +68,19 @@ where
     }
 }
 
+impl<S1, S2, B1, B2> PartialEq<Publish<S2, B2>> for Publish<S1, B1>
+where
+    S1: PartialEq<S2>,
+    B1: PartialEq<B2>,
+{
+    fn eq(&self, other: &Publish<S2, B2>) -> bool {
+        self.qos.eq(&other.qos)
+            && self.retain.eq(&other.retain)
+            && self.topic.eq(&other.topic)
+            && self.payload.eq(&other.payload)
+    }
+}
+
 impl<S, B> From<ClientPublish<S, B>> for Publish<S, B> {
     fn from(value: ClientPublish<S, B>) -> Self {
         Self {
@@ -82,7 +95,7 @@ impl<S, B> From<ClientPublish<S, B>> for Publish<S, B> {
 impl<S, B> EncodePacket for Publish<S, B>
 where
     S: Deref<Target = str>,
-    B: Deref<Target = [u8]>,
+    B: AsRef<[u8]>,
 {
     fn remaining_len(&self) -> usize {
         let mut len = self.topic.encode_len();
@@ -91,7 +104,7 @@ where
             len = len.saturating_add(pkid.encode_len());
         }
 
-        len.saturating_add(self.payload.deref().encode_len())
+        len.saturating_add(self.payload.as_ref().encode_len())
     }
 
     fn packet_type() -> ControlPacketType {
@@ -136,7 +149,7 @@ where
             variable = variable.saturating_add(pkid.write(writer)?);
         }
 
-        Ok(variable.saturating_add(self.payload.deref().write(writer)?))
+        Ok(variable.saturating_add(self.payload.as_ref().write(writer)?))
     }
 }
 
@@ -162,7 +175,7 @@ impl<'a> DecodePacket<'a> for PublishRef<'a> {
 }
 
 /// Level of assurance for delivery of an Application Message.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum PublishQos {
     /// At most once delivery.
@@ -345,7 +358,7 @@ impl From<StrError> for TopicError {
 pub type PublishTopicRef<'a> = PublishTopic<&'a str>;
 
 /// The Topic Name identifies the information channel to which payload data is published.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct PublishTopic<S>(Str<S>);
 
 impl<S> Display for PublishTopic<S>
@@ -386,6 +399,15 @@ impl<'a> Decode<'a> for PublishTopicRef<'a> {
         let topic = PublishTopic::try_from(str.as_str())?;
 
         Ok((topic, bytes))
+    }
+}
+
+impl<S1, S2> PartialEq<PublishTopic<S2>> for PublishTopic<S1>
+where
+    S1: PartialEq<S2>,
+{
+    fn eq(&self, other: &PublishTopic<S2>) -> bool {
+        self.0.eq(&other.0)
     }
 }
 
@@ -705,6 +727,10 @@ impl EncodePacket for PubComp {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
+    use crate::v3::tests::TestWriter;
+
     use super::*;
 
     #[test]
@@ -716,5 +742,149 @@ mod tests {
         let err = PublishTopic::try_from("/foo/#").unwrap_err();
 
         assert!(matches!(err, TopicError::Wildcard));
+    }
+
+    #[test]
+    fn should_encode_and_decode_publish() {
+        let publish = Publish {
+            qos: PublishQos::AtLeastOnce {
+                dup: true,
+                pkid: PacketId::try_from(10u16).unwrap(),
+            },
+            retain: false,
+            topic: PublishTopic::try_from("a/b").unwrap(),
+            payload: [42u8],
+        };
+
+        let exp_bytes = [
+            0b0011_1010u8,
+            8,
+            // topic
+            0b0000_0000,
+            0b0000_0011,
+            0b0110_0001,
+            0b0010_1111,
+            0b0110_0010,
+            // pkid
+            0b0000_0000,
+            0b0000_1010,
+            // payload
+            0b0010_1010,
+        ];
+
+        let mut writer = TestWriter::new();
+
+        publish.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (res, bytes) = <PublishRef as DecodePacket>::parse(&exp_bytes).unwrap();
+        assert!(bytes.is_empty());
+
+        assert_eq!(res, publish);
+    }
+
+    #[test]
+    fn should_encode_and_decode_puback() {
+        let puback = PubAck {
+            pkid: PacketId::try_from(10u16).unwrap(),
+        };
+
+        let exp_bytes = [
+            0b0100_0000u8,
+            2,
+            // pkid
+            0b0000_0000,
+            0b0000_1010,
+        ];
+
+        let mut writer = TestWriter::new();
+
+        puback.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (res, bytes) = <PubAck as DecodePacket>::parse(&exp_bytes).unwrap();
+        assert!(bytes.is_empty());
+
+        assert_eq!(res, puback);
+    }
+
+    #[test]
+    fn should_encode_and_decode_pubrec() {
+        let pubrec = PubRec {
+            pkid: PacketId::try_from(10u16).unwrap(),
+        };
+
+        let exp_bytes = [
+            0b0101_0000u8,
+            2,
+            // pkid
+            0b0000_0000,
+            0b0000_1010,
+        ];
+
+        let mut writer = TestWriter::new();
+
+        pubrec.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (res, bytes) = <PubRec as DecodePacket>::parse(&exp_bytes).unwrap();
+        assert!(bytes.is_empty());
+
+        assert_eq!(res, pubrec);
+    }
+
+    #[test]
+    fn should_encode_and_decode_pubrel() {
+        let pubrel = PubRel {
+            pkid: PacketId::try_from(10u16).unwrap(),
+        };
+
+        let exp_bytes = [
+            0b0110_0010u8,
+            2,
+            // pkid
+            0b0000_0000,
+            0b0000_1010,
+        ];
+
+        let mut writer = TestWriter::new();
+
+        pubrel.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (res, bytes) = <PubRel as DecodePacket>::parse(&exp_bytes).unwrap();
+        assert!(bytes.is_empty());
+
+        assert_eq!(res, pubrel);
+    }
+
+    #[test]
+    fn should_encode_and_decode_pubcomp() {
+        let pubcomp = PubComp {
+            pkid: PacketId::try_from(10u16).unwrap(),
+        };
+
+        let exp_bytes = [
+            0b0111_0000u8,
+            2,
+            // pkid
+            0b0000_0000,
+            0b0000_1010,
+        ];
+
+        let mut writer = TestWriter::new();
+
+        pubcomp.write(&mut writer).unwrap();
+
+        assert_eq!(writer.buf, exp_bytes);
+
+        let (res, bytes) = <PubComp as DecodePacket>::parse(&exp_bytes).unwrap();
+        assert!(bytes.is_empty());
+
+        assert_eq!(res, pubcomp);
     }
 }

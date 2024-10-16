@@ -58,7 +58,7 @@ pub type StrRef<'a> = Str<&'a str>;
 /// Text fields in the Control Packets described later are encoded as UTF-8 strings.
 ///
 /// <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718016>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct Str<S>(S);
 
 impl<S> Str<S> {
@@ -101,6 +101,15 @@ where
 impl<'a> Default for StrRef<'a> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<S1, S2> PartialEq<Str<S2>> for Str<S1>
+where
+    S1: PartialEq<S2>,
+{
+    fn eq(&self, other: &Str<S2>) -> bool {
+        self.0.eq(&other.0)
     }
 }
 
