@@ -1,6 +1,9 @@
-use std::{net::TcpStream, time::Duration};
+use std::{
+    net::TcpStream,
+    time::{Duration, SystemTime},
+};
 
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{eyre, WrapErr};
 use mcutt::{
     sync::Connection,
     v3::{
@@ -23,7 +26,7 @@ fn main() -> color_eyre::Result<()> {
     let connection = TcpStream::connect("127.0.0.1:1883")?;
     connection.set_read_timeout(Some(Duration::from_secs(10)))?;
 
-    let mut connection = Connection::new(&connection);
+    let mut connection = Arc::new(Connection::new(&connection));
 
     let keep_alive = KeepAlive::try_from(Duration::from_secs(10))?;
     let client_id = Str::try_from("mcutt-sync-client")?;
@@ -35,6 +38,13 @@ fn main() -> color_eyre::Result<()> {
     let connack = connection.connect(&connect)?;
 
     println!("{connack}");
+
+    let send = std::thread::spawn(|| {});
+    let receiver = std::thread::spawn(|| {
+        connect.recv()?;
+
+        Ok(())
+    });
 
     let publish = ClientPublish::new(
         PublishTopic::try_from("/example")?,
@@ -48,11 +58,36 @@ fn main() -> color_eyre::Result<()> {
     println!("PUBLISH pkid({id})");
 
     let puback = connection
-        .revc()?
+        .recv()?
         .try_into_pub_ack()
         .map_err(|p| eyre!("expected PUBACK, got {p}"))?;
 
     println!("{puback}");
+
+    Ok(())
+}
+
+fn recv(client: &Connection) -> color_eyre::Result<()> {
+    loop {
+        let packet = client.recv().wrap_err("couldn't receive message")?;
+
+        println!("{packet}");
+    }
+
+    Ok(())
+}
+
+fn send(client: &Connection) -> color_eyre::Result<()> {
+    let time = SystemTime::now();
+
+    loop {
+        let time = time.elapsed()?.as_secs();
+
+        let publish = ClientPublish::new("/time/secs", time.to_le_bytes());
+        client.publish(publish)?;
+
+        std::thread::sleep(Duration::from_secs(2));
+    }
 
     Ok(())
 }

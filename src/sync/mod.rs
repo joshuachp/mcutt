@@ -7,6 +7,7 @@ use std::{
     net::TcpStream,
 };
 
+use buf::ReadBuffer;
 use tracing::{error, instrument, trace};
 
 use crate::{
@@ -19,9 +20,12 @@ use crate::{
             ClientPublishOwned, ClientPublishRef, ClientQos, PubAck, PubComp, PubRec, Publish,
             PublishOwned,
         },
-        Decode, DecodeError, EncodeError, EncodePacket, Writer, MAX_PACKET_SIZE,
+        DecodeError, EncodeError, EncodePacket, Writer,
     },
 };
+
+pub mod buf;
+pub mod socket;
 
 /// Error returned by the MQTT connection
 #[derive(Debug)]
@@ -329,7 +333,7 @@ impl<'c> Connection<'c> {
     /// packets for QoS 2.
     #[instrument(skip(self))]
     #[must_use]
-    pub fn revc<'a>(&'a mut self) -> Result<Packet<'a>, ConnectError> {
+    pub fn recv(&self) -> Result<Packet, ConnectError> {
         let packet = self.reader.recv().map_err(ConnectError::Read)?;
 
         match &packet {
@@ -353,169 +357,6 @@ impl<'c> Connection<'c> {
         }
 
         Ok(packet)
-    }
-}
-
-/// Buffer to store the data from the [`TcpStream`].
-#[derive(Debug)]
-pub struct ReadBuffer {
-    buf: Vec<u8>,
-    data_start: usize,
-    data_end: usize,
-    max_size: NonZeroUsize,
-}
-
-impl ReadBuffer {
-    /// The default initial capacity of the buffer.
-    pub const DEFULAT_INITIAL: NonZeroUsize = const_non_zero(8 * 1024);
-
-    /// The default maximum size that the buffer will grow to.
-    pub const DEFULAT_MAX_SIZE: NonZeroUsize = const_non_zero(MAX_PACKET_SIZE);
-
-    /// Create a new buffer with the specified initial capacity.
-    #[must_use]
-    pub fn new(initial: NonZeroUsize) -> Self {
-        Self::with_max_size(initial, Self::DEFULAT_MAX_SIZE)
-    }
-
-    /// Create a new buffer with the specified initial capacity and maximum size.
-    #[must_use]
-    pub fn with_max_size(initial: NonZeroUsize, max_size: NonZeroUsize) -> Self {
-        Self {
-            buf: vec![0; initial.get()],
-            data_start: 0,
-            data_end: 0,
-            max_size,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.data_start == self.data_end
-    }
-
-    /// Reset the data portion
-    fn reset(&mut self) {
-        self.data_start = 0;
-        self.data_end = 0;
-    }
-
-    /// Return the free portion of the buffer.
-    fn writable(&mut self) -> &mut [u8] {
-        &mut self.buf[self.data_end..]
-    }
-
-    /// Update the data portion size.
-    fn filled(&mut self, read: usize) {
-        self.data_end = self.data_end.saturating_add(read);
-    }
-
-    fn consumed(&self, remaining: &[u8]) -> usize {
-        self.data_end
-            .saturating_sub(self.data_start)
-            .saturating_sub(remaining.len())
-    }
-
-    /// Shifts the data to the start of the buffer, so there is more free space to fill at the end.
-    fn compact(&mut self) {
-        self.buf.rotate_left(self.data_start);
-    }
-
-    fn parse<'a, T>(&'a mut self) -> Result<T, DecodeError>
-    where
-        T: Decode<'a>,
-    {
-        match T::parse(&self.buf[self.data_start..self.data_end]) {
-            Ok((val, bytes)) => {
-                let consumed = self.consumed(bytes);
-
-                self.data_start = self.data_start.saturating_add(consumed);
-
-                Ok(val)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn parse_packet(&mut self, header: FixedHeader) -> Result<Packet, DecodeError> {
-        let remaining_length =
-            usize::try_from(header.remaining_length()).map_err(DecodeError::RemainingLength)?;
-
-        let new_start = self.data_start.saturating_add(remaining_length);
-        let start = std::mem::replace(&mut self.data_start, new_start);
-
-        debug_assert!(self.data_start <= self.data_end);
-
-        let bytes = &self.buf[start..self.data_start];
-
-        match Packet::parse_with_header(header, bytes) {
-            Ok(val) => {
-                let consumed = self.consumed(bytes);
-
-                self.data_start = self.data_start.saturating_add(consumed);
-
-                Ok(val)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn writable_len(&self) -> usize {
-        self.buf.len().saturating_sub(self.data_end)
-    }
-
-    fn readable_len(&self) -> usize {
-        self.data_end.saturating_sub(self.data_start)
-    }
-
-    fn reserve(&mut self, needed: usize) -> Result<(), ReadError> {
-        if self.writable_len() >= needed {
-            return Ok(());
-        }
-
-        // No-op if empty
-        self.compact();
-
-        let writable_len = self.writable_len();
-        if writable_len >= needed {
-            return Ok(());
-        }
-
-        // |--            len            --|
-        // |-- filled --|-- writable_len --|
-        //              |--      needed      --|
-        let new_len = self
-            .buf
-            .len()
-            .saturating_sub(needed.saturating_sub(writable_len));
-
-        if new_len > self.max_size.get() {
-            return Err(ReadError::OutOfMemory {
-                max: self.max_size,
-                required: new_len,
-            });
-        }
-
-        // Over allocate to prevent frequent resizing, but cap it at max. We already checked that
-        // the new length.
-        let additional = self
-            .buf
-            .capacity()
-            .saturating_mul(2)
-            .max(self.max_size.get())
-            .saturating_sub(self.buf.len());
-
-        self.buf.try_reserve_exact(additional)?;
-
-        self.buf.resize(new_len, 0);
-        self.buf.resize(new_len, 0);
-
-        Ok(())
-    }
-}
-
-impl Default for ReadBuffer {
-    fn default() -> Self {
-        ReadBuffer::new(Self::DEFULAT_INITIAL)
     }
 }
 
@@ -589,7 +430,7 @@ impl<'c> TcpReader<'c> {
     }
 }
 
-impl Writer for BufWriter<&'_ TcpStream> {
+impl<'a> Writer for BufWriter<&'a TcpStream> {
     type Err = io::Error;
 
     fn write_slice(&mut self, buf: &[u8]) -> Result<usize, Self::Err> {
