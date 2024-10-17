@@ -1,0 +1,16 @@
+services:
+  # mqtt5 eclipse-mosquito
+  broker:
+    build: ./
+    ports:
+      - "1883:1883" #default mqtt port
+      - "9001:9001" #default mqtt port for websockets
+    volumes:
+      - data:/mosquitto/data:rw
+      - log:/mosquitto/log:rw
+    restart: unless-stopped
+
+# volumes for mapping data,config and log
+volumes:
+  data:
+  log:
