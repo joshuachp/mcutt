@@ -8,6 +8,4 @@ extern crate alloc;
 mod bytes;
 #[cfg(feature = "std")]
 pub mod slab;
-#[cfg(feature = "sync")]
-pub mod sync;
 pub mod v3;

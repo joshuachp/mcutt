@@ -435,8 +435,6 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::v3::{header::Str, tests::TestWriter};
-
     use super::*;
 
     #[test]

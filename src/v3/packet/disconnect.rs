@@ -1,10 +1,8 @@
 //! Handle the DISCONNECT Packet.
 
-use crate::v3::DecodeError;
-
 use super::{
     header::{ControlPacketType, FixedHeader, RemainingLength, TypeFlags},
-    DecodePacket, EncodePacket,
+    DecodeError, DecodePacket, EncodePacket,
 };
 
 /// The DISCONNECT Packet is the final Control Packet sent from the Client to the Server.
@@ -66,7 +64,7 @@ impl<'a> DecodePacket<'a> for Disconnect {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::v3::tests::TestWriter;
+    use crate::v3::packet::tests::TestWriter;
 
     use super::*;
 
