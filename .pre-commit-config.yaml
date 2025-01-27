@@ -20,6 +20,14 @@ repos:
       - id: rust-test-doc
       - id: rust-hack
       - id: rust-min-ver
+      - id: nix-nixfmt
+      - id: nix-statix
+      - id: run-prettier
+        types_or:
+          - yaml
+      - id: run-dprint
+        types_or:
+          - markdown
   - repo: local
     hooks:
       - id: rust-msrv
@@ -27,4 +35,4 @@ repos:
         description: Check the MSRV
         language: system
         pass_filenames: false
-        entry: cargo +1.72 check --all-features
+        entry: cargo +1.78 check --all-features

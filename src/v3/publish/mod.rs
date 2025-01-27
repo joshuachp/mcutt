@@ -424,7 +424,7 @@ pub struct PubAck {
 }
 
 impl PubAck {
-    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+    const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
 
     /// Create the PUBACK for the given packet id.
     #[must_use]
@@ -451,7 +451,7 @@ impl<'a> DecodePacket<'a> for PubAck {
     }
 
     fn fixed_remaining_length() -> Option<RemainingLength> {
-        Some(Self::REMAINIGN_LENGTH)
+        Some(Self::REMAINING_LENGTH)
     }
 
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
@@ -501,7 +501,7 @@ pub struct PubRec {
 }
 
 impl PubRec {
-    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+    const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
 
     /// Create the PUBACK for the given packet id.
     #[must_use]
@@ -528,7 +528,7 @@ impl<'a> DecodePacket<'a> for PubRec {
     }
 
     fn fixed_remaining_length() -> Option<RemainingLength> {
-        Some(Self::REMAINIGN_LENGTH)
+        Some(Self::REMAINING_LENGTH)
     }
 
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
@@ -580,7 +580,7 @@ pub struct PubRel {
 }
 
 impl PubRel {
-    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+    const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
 
     /// Create the PUBACK for the given packet id.
     #[must_use]
@@ -607,7 +607,7 @@ impl<'a> DecodePacket<'a> for PubRel {
     }
 
     fn fixed_remaining_length() -> Option<RemainingLength> {
-        Some(Self::REMAINIGN_LENGTH)
+        Some(Self::REMAINING_LENGTH)
     }
 
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
@@ -657,7 +657,7 @@ pub struct PubComp {
 }
 
 impl PubComp {
-    const REMAINIGN_LENGTH: RemainingLength = RemainingLength::new_const(2);
+    const REMAINING_LENGTH: RemainingLength = RemainingLength::new_const(2);
 
     /// Create the PUBACK for the given packet id.
     #[must_use]
@@ -684,7 +684,7 @@ impl<'a> DecodePacket<'a> for PubComp {
     }
 
     fn fixed_remaining_length() -> Option<RemainingLength> {
-        Some(Self::REMAINIGN_LENGTH)
+        Some(Self::REMAINING_LENGTH)
     }
 
     fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Self, DecodeError> {
