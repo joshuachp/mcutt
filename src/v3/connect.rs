@@ -219,7 +219,7 @@ bitflags! {
 ///
 /// It is the maximum time interval that is permitted to elapse between the point at which the
 /// Client finishes transmitting one Control Packet and the point it starts sending the next.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeepAlive(u16);
 
 impl KeepAlive {
@@ -433,6 +433,8 @@ bitflags! {
 #[cfg(test)]
 mod tests {
 
+    use pretty_assertions::assert_eq;
+
     use crate::v3::{header::Str, tests::TestWriter};
 
     use super::*;
@@ -445,6 +447,17 @@ mod tests {
         let conn = Connect::new(client_id, keep_alive);
 
         assert!(conn.flags.contains(ConnectFlags::CLEAN_SESSION));
+    }
+
+    #[test]
+    fn should_permit_keep_alive_zero() {
+        let keep_alive = KeepAlive::from(0);
+
+        assert_eq!(keep_alive, KeepAlive(0));
+
+        let keep_alive = KeepAlive::try_from(Duration::from_secs(0)).unwrap();
+
+        assert_eq!(keep_alive, KeepAlive(0));
     }
 
     #[test]
