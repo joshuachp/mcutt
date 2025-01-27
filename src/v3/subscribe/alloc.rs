@@ -6,14 +6,14 @@ use alloc::{string::String, vec::Vec};
 
 use super::{SubscribeCursor, SubscribeTopic};
 
-impl<'a> SubscribeCursor<'a> {
+impl SubscribeCursor<'_> {
     /// Converts the filter to an owned value.
     pub fn to_vec(&self) -> Vec<SubscribeTopic<String>> {
         self.into_iter().map(|f| f.into()).collect()
     }
 }
 
-impl<'a, S> PartialEq<Vec<SubscribeTopic<S>>> for SubscribeCursor<'a>
+impl<S> PartialEq<Vec<SubscribeTopic<S>>> for SubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {

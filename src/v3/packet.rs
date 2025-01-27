@@ -63,7 +63,10 @@ impl<'a> Packet<'a> {
     /// # Errors
     ///
     /// If the packet is invalid for the given header or the decode failed.
-    pub fn parse_with_header(header: FixedHeader, bytes: &'a [u8]) -> Result<Packet, DecodeError> {
+    pub fn parse_with_header(
+        header: FixedHeader,
+        bytes: &'a [u8],
+    ) -> Result<Packet<'a>, DecodeError> {
         match header.packet_type() {
             ControlPacketType::Connect => Err(DecodeError::PacketType(header.packet_type().into())),
             ControlPacketType::ConnAck => Self::parse_packet::<ConnAck>(header, bytes),
@@ -191,7 +194,7 @@ impl<'a> Packet<'a> {
     }
 }
 
-impl<'a> Display for Packet<'a> {
+impl Display for Packet<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Packet::ConnAck(value) => Display::fmt(value, f),
@@ -221,7 +224,7 @@ impl<'a> Decode<'a> for Packet<'a> {
     }
 }
 
-impl<'a> From<ConnAck> for Packet<'a> {
+impl From<ConnAck> for Packet<'_> {
     fn from(v: ConnAck) -> Self {
         Self::ConnAck(v)
     }
@@ -233,25 +236,25 @@ impl<'a> From<PublishRef<'a>> for Packet<'a> {
     }
 }
 
-impl<'a> From<PubAck> for Packet<'a> {
+impl From<PubAck> for Packet<'_> {
     fn from(v: PubAck) -> Self {
         Self::PubAck(v)
     }
 }
 
-impl<'a> From<PubRec> for Packet<'a> {
+impl From<PubRec> for Packet<'_> {
     fn from(v: PubRec) -> Self {
         Self::PubRec(v)
     }
 }
 
-impl<'a> From<PubRel> for Packet<'a> {
+impl From<PubRel> for Packet<'_> {
     fn from(v: PubRel) -> Self {
         Self::PubRel(v)
     }
 }
 
-impl<'a> From<PubComp> for Packet<'a> {
+impl From<PubComp> for Packet<'_> {
     fn from(v: PubComp) -> Self {
         Self::PubComp(v)
     }
@@ -263,13 +266,13 @@ impl<'a> From<SubAckRef<'a>> for Packet<'a> {
     }
 }
 
-impl<'a> From<UnsubAck> for Packet<'a> {
+impl From<UnsubAck> for Packet<'_> {
     fn from(value: UnsubAck) -> Self {
         Self::UnsubAck(value)
     }
 }
 
-impl<'a> From<PingResp> for Packet<'a> {
+impl From<PingResp> for Packet<'_> {
     fn from(value: PingResp) -> Self {
         Self::PingResp(value)
     }

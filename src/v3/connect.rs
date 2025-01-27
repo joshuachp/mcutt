@@ -114,7 +114,7 @@ impl<'a> Connect<'a> {
     }
 }
 
-impl<'a> Debug for Connect<'a> {
+impl Debug for Connect<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Connect")
             .field("flags", &self.flags)
@@ -127,7 +127,7 @@ impl<'a> Debug for Connect<'a> {
     }
 }
 
-impl<'a> EncodePacket for Connect<'a> {
+impl EncodePacket for Connect<'_> {
     fn packet_type() -> ControlPacketType {
         ControlPacketType::Connect
     }
@@ -269,7 +269,7 @@ impl<'a> Will<'a> {
     }
 }
 
-impl<'a> Encode for Will<'a> {
+impl Encode for Will<'_> {
     fn encode_len(&self) -> usize {
         self.topic
             .encode_len()

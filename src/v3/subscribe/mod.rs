@@ -230,7 +230,7 @@ pub struct SubscribeCursor<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> Deref for SubscribeCursor<'a> {
+impl Deref for SubscribeCursor<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -252,7 +252,7 @@ impl<'a> IntoIterator for &'a SubscribeCursor<'_> {
     }
 }
 
-impl<'a, const N: usize, S> PartialEq<[SubscribeTopic<S>; N]> for SubscribeCursor<'a>
+impl<const N: usize, S> PartialEq<[SubscribeTopic<S>; N]> for SubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {
@@ -261,7 +261,7 @@ where
     }
 }
 
-impl<'a, S> PartialEq<[SubscribeTopic<S>]> for SubscribeCursor<'a>
+impl<S> PartialEq<[SubscribeTopic<S>]> for SubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {
@@ -497,13 +497,13 @@ impl<'a> IntoIterator for &'a SubAckCodeCursor<'_> {
     }
 }
 
-impl<'a, const N: usize> PartialEq<[SubAckCode; N]> for SubAckCodeCursor<'a> {
+impl<const N: usize> PartialEq<[SubAckCode; N]> for SubAckCodeCursor<'_> {
     fn eq(&self, other: &[SubAckCode; N]) -> bool {
         self.into_iter().eq(other.iter().copied())
     }
 }
 
-impl<'a> PartialEq<[SubAckCode]> for SubAckCodeCursor<'a> {
+impl PartialEq<[SubAckCode]> for SubAckCodeCursor<'_> {
     fn eq(&self, other: &[SubAckCode]) -> bool {
         self.into_iter().eq(other.iter().copied())
     }

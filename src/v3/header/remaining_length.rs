@@ -262,7 +262,7 @@ impl<'a, const N: usize> Decode<'a> for RawRemainingLength<'a, N> {
     }
 }
 
-impl<'a, const N: usize> Encode for RawRemainingLength<'a, N> {
+impl<const N: usize> Encode for RawRemainingLength<'_, N> {
     fn encode_len(&self) -> usize {
         N
     }

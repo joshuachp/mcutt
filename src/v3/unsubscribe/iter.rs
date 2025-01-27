@@ -10,7 +10,7 @@ pub struct Iter<I> {
     iter: I,
 }
 
-impl<'a, I: 'a> Iter<I> {
+impl<I> Iter<I> {
     pub(crate) fn new<T>(into: T) -> Self
     where
         T: IntoIterator<IntoIter = I>,
