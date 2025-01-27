@@ -47,7 +47,7 @@ impl<'a> SubAckCodeIter<'a> {
     }
 }
 
-impl<'a> Iterator for SubAckCodeIter<'a> {
+impl Iterator for SubAckCodeIter<'_> {
     type Item = SubAckCode;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -74,7 +74,7 @@ impl<'a> Iterator for SubAckCodeIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for SubAckCodeIter<'a> {
+impl ExactSizeIterator for SubAckCodeIter<'_> {
     fn len(&self) -> usize {
         self.iter.len()
     }

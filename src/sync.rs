@@ -589,7 +589,7 @@ impl<'c> TcpReader<'c> {
     }
 }
 
-impl<'a> Writer for BufWriter<&'a TcpStream> {
+impl Writer for BufWriter<&'_ TcpStream> {
     type Err = io::Error;
 
     fn write_slice(&mut self, buf: &[u8]) -> Result<usize, Self::Err> {

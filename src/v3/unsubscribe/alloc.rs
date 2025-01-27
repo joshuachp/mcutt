@@ -6,14 +6,14 @@ use alloc::{string::String, vec::Vec};
 
 use super::{UnsubscribeCursor, UnsubscribeTopic};
 
-impl<'a> UnsubscribeCursor<'a> {
+impl UnsubscribeCursor<'_> {
     /// Converts the filter to an owned value.
     pub fn to_vec(&self) -> Vec<UnsubscribeTopic<String>> {
         self.into_iter().map(|f| f.into()).collect()
     }
 }
 
-impl<'a, S> PartialEq<Vec<UnsubscribeTopic<S>>> for UnsubscribeCursor<'a>
+impl<S> PartialEq<Vec<UnsubscribeTopic<S>>> for UnsubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {

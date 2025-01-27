@@ -68,7 +68,7 @@ impl<S> Str<S> {
     where
         S: Deref<Target = str>,
     {
-        self.0.as_bytes().len()
+        self.0.len()
     }
 }
 
@@ -98,7 +98,7 @@ where
     }
 }
 
-impl<'a> Default for StrRef<'a> {
+impl Default for StrRef<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -126,7 +126,7 @@ impl<'a> TryFrom<&'a str> for StrRef<'a> {
     type Error = StrError;
 
     fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        let len = value.as_bytes().len();
+        let len = value.len();
         if len > Str::MAX_BYTES {
             return Err(StrError::MaxBytes { len });
         }
@@ -250,12 +250,12 @@ impl Display for BytesBufError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BytesBuf<'a>(&'a [u8]);
 
-impl<'a> BytesBuf<'a> {
+impl BytesBuf<'_> {
     /// Maximum number of bytes in the buffer.
     pub const MAX: usize = u16::MAX as usize;
 }
 
-impl<'a> Deref for BytesBuf<'a> {
+impl Deref for BytesBuf<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -288,7 +288,7 @@ impl<'a> Decode<'a> for BytesBuf<'a> {
     }
 }
 
-impl<'a> Encode for BytesBuf<'a> {
+impl Encode for BytesBuf<'_> {
     fn encode_len(&self) -> usize {
         mem::size_of::<u16>().saturating_add(self.len())
     }

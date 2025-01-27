@@ -581,7 +581,7 @@ impl TryFrom<u8> for Qos {
 }
 
 #[cfg(test)]
-pub mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[derive(Debug)]

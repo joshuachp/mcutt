@@ -210,7 +210,7 @@ pub struct UnsubscribeCursor<'a> {
     bytes: &'a [u8],
 }
 
-impl<'a> Deref for UnsubscribeCursor<'a> {
+impl Deref for UnsubscribeCursor<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -232,7 +232,7 @@ impl<'a> IntoIterator for &'a UnsubscribeCursor<'_> {
     }
 }
 
-impl<'a, const N: usize, S> PartialEq<[UnsubscribeTopic<S>; N]> for UnsubscribeCursor<'a>
+impl<const N: usize, S> PartialEq<[UnsubscribeTopic<S>; N]> for UnsubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {
@@ -241,7 +241,7 @@ where
     }
 }
 
-impl<'a, S> PartialEq<[UnsubscribeTopic<S>]> for UnsubscribeCursor<'a>
+impl<S> PartialEq<[UnsubscribeTopic<S>]> for UnsubscribeCursor<'_>
 where
     S: Deref<Target = str>,
 {
