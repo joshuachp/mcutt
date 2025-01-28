@@ -8,7 +8,7 @@ use core::{
 
 use iter::{Iter, SubAckCodeIter};
 
-use crate::{bytes::read_u8, v3::header::ControlPacketType};
+use crate::v3::{bytes::read_u8, packets::header::ControlPacketType};
 
 use super::{
     header::{PacketId, Str, StrRef, TypeFlags},
@@ -513,7 +513,7 @@ impl PartialEq<[SubAckCode]> for SubAckCodeCursor<'_> {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::v3::tests::TestWriter;
+    use crate::v3::packets::tests::TestWriter;
 
     use super::*;
 

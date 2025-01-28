@@ -1,4 +1,4 @@
-use crate::v3::DecodeError;
+use super::packets::DecodeError;
 
 pub(crate) fn read_u8(bytes: &[u8]) -> Result<(u8, &[u8]), DecodeError> {
     let ([byte], rest) = read_chunk::<1>(bytes)?;

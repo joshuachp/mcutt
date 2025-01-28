@@ -2,7 +2,7 @@
 
 use core::fmt::Display;
 
-use crate::v3::{header::ControlPacketType, DecodeError};
+use crate::v3::packets::{header::ControlPacketType, DecodeError};
 
 use super::{
     header::{FixedHeader, RemainingLength, TypeFlags},
@@ -140,7 +140,7 @@ impl<'a> DecodePacket<'a> for PingResp {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::v3::tests::TestWriter;
+    use crate::v3::packets::tests::TestWriter;
 
     use super::*;
 

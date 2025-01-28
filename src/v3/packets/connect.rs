@@ -10,7 +10,7 @@ use core::{
 
 use bitflags::bitflags;
 
-use crate::bytes::read_u8;
+use crate::v3::bytes::read_u8;
 
 use super::{
     header::{BytesBuf, ControlPacketType, FixedHeader, RemainingLength, StrRef, TypeFlags},
@@ -435,7 +435,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::v3::{header::Str, tests::TestWriter};
+    use crate::v3::packets::{header::Str, tests::TestWriter};
 
     use super::*;
 

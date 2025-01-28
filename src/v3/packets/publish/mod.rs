@@ -729,7 +729,7 @@ impl EncodePacket for PubComp {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::v3::tests::TestWriter;
+    use crate::v3::packets::tests::TestWriter;
 
     use super::*;
 

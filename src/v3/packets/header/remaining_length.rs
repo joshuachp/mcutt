@@ -2,9 +2,9 @@
 
 use core::{fmt::Display, num::TryFromIntError, ops::Deref};
 
-use crate::{
+use crate::v3::{
     bytes::read_chunk,
-    v3::{Decode, DecodeError, Encode, EncodeError, Writer},
+    packets::{Decode, DecodeError, Encode, EncodeError, Writer},
 };
 
 /// Error for an invalid [`RemainingLength`].
@@ -281,7 +281,7 @@ impl<const N: usize> Encode for RawRemainingLength<'_, N> {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use crate::v3::{
+    use crate::v3::packets::{
         header::{ControlPacketType, FixedHeader, TypeFlags},
         tests::TestWriter,
         Decode,

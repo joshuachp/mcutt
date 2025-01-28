@@ -5,7 +5,6 @@
 #![cfg(feature = "alloc")]
 extern crate alloc;
 
-mod bytes;
 #[cfg(feature = "std")]
 pub mod slab;
 #[cfg(feature = "sync")]

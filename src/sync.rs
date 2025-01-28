@@ -11,7 +11,7 @@ use tracing::{error, instrument, trace};
 
 use crate::{
     slab::{Entry, Slab},
-    v3::{
+    v3::packets::{
         connect::{ConnAck, Connect, ReturnCode},
         header::{FixedHeader, PacketId},
         packet::Packet,
