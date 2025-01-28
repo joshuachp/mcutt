@@ -3,7 +3,7 @@ use std::{net::TcpStream, time::Duration};
 use color_eyre::eyre::eyre;
 use mcutt::{
     sync::Connection,
-    v3::{
+    v3::packets::{
         connect::{Connect, KeepAlive},
         header::Str,
         publish::{ClientPublish, ClientQos, PublishTopic},

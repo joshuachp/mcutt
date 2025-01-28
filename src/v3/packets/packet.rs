@@ -2,9 +2,9 @@
 
 use core::fmt::{Debug, Display};
 
-use crate::{
+use crate::v3::{
     bytes::read_exact,
-    v3::{header::ControlPacketType, DecodeError},
+    packets::{header::ControlPacketType, DecodeError},
 };
 
 use super::{

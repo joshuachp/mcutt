@@ -4,9 +4,9 @@ use core::{fmt::Display, mem, num::NonZeroU16, ops::Deref};
 
 use bitflags::bitflags;
 
-use crate::{
+use crate::v3::{
     bytes::{read_exact, read_u16, read_u8},
-    v3::EncodeError,
+    packets::EncodeError,
 };
 
 use super::{Decode, DecodeError, Encode};
