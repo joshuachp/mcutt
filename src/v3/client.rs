@@ -1,88 +1,81 @@
-//! Sync MQTT v3 client
+use core::marker::PhantomData;
+use core::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::Instant;
 
-use std::{
-    io::{self, BufReader, BufWriter, IoSlice, IoSliceMut, Read, Write},
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use fnv::FnvHashMap;
 
-/// Client that wraps a transport to send and receive MQTT packets.
-#[derive(Debug)]
-pub struct Client<R, W>
-where
-    R: std::io::Read,
-    W: std::io::Write,
-{
-    inner: Arc<SharedClient<R, W>>,
+use crate::slab::{Access, Entry, Slab};
+use crate::v3::packets::connect::ReturnCode;
+
+use super::packets::connect::{ConnAck, Connect};
+use super::packets::header::PacketId;
+use super::packets::packet::Packet;
+
+struct Client {
+    // TODO: state of the packages
+    incoming: FnvHashMap<PacketId, ()>,
+    // TODO: state of the packages
+    outgoing: Slab<Entry<Vec<()>>>,
+    // TODO: ping state
+    keepalive: bool,
+    /// Client is waiting for the CONNACK
+    wait_for_connack: bool,
 }
 
-impl<R, W> Client<R, W>
-where
-    R: std::io::Read,
-    W: std::io::Write,
-{
-    fn with_both(reader: R, writer: W) -> Self {
-        let reader = Mutex::new(BufReader::new(reader));
-        let writer = Mutex::new(BufWriter::new(writer));
+struct Keepalive {
+    instant: Instant,
+    sent: Arc<AtomicBool>,
+}
 
-        Self {
-            inner: Arc::new(SharedClient { reader, writer }),
+impl Client {
+    fn connect(packet: &Connect) -> Result<(), ()> {
+        if packet.has_clean_session() {}
+
+        Ok(())
+    }
+
+    fn handle_incoming(&mut self, packet: &Packet<'_>) -> Result<(), ()> {
+        if self.wait_for_connack && !packet.is_conn_ack() {
+            return Err(());
+        }
+
+        match packet {
+            Packet::ConnAck(conn_ack) => self.handle_connack(conn_ack),
+            Packet::Publish(publish) => {}
+            Packet::PubAck(pub_ack) => {}
+            Packet::PubRec(pub_rec) => {}
+            Packet::PubRel(pub_rel) => {}
+            Packet::PubComp(pub_comp) => {}
+            Packet::SubAck(sub_ack) => {}
+            Packet::UnsubAck(unsub_ack) => {}
+            Packet::PingResp(ping_resp) => {}
         }
     }
-}
 
-impl<S> Client<SharedSocket<S>, SharedSocket<S>>
-where
-    for<'a> &'a S: std::io::Read,
-    for<'a> &'a S: std::io::Write,
-{
-    fn with_shared(socket: S) -> Self {
-        let reader = Rc::new(socket);
-        let writer = Rc::clone(&reader);
+    fn handle_connack(&mut self, conn_ack: &ConnAck) -> Result<(), ()> {
+        match conn_ack.return_code() {
+            ReturnCode::Accepted => {
+                if !conn_ack.session_present() {
+                    self.new_session()
+                }
 
-        Self::with_both(SharedSocket(reader), SharedSocket(writer))
-    }
-}
+                Ok(())
+            }
+            ReturnCode::ProtocolVersion => todo!(),
+            ReturnCode::IdentifierRejected => todo!(),
+            ReturnCode::ServerUnavailable => todo!(),
+            ReturnCode::BadUsernamePassword => todo!(),
+            ReturnCode::NotAuthorized => todo!(),
+        }
 
-#[derive(Debug)]
-struct SharedClient<R, W>
-where
-    W: std::io::Write,
-{
-    reader: Mutex<BufReader<R>>,
-    writer: Mutex<BufWriter<W>>,
-}
-
-#[derive(Debug)]
-struct SharedSocket<S>(Rc<S>);
-
-impl<S> Read for SharedSocket<S>
-where
-    for<'a> &'a S: Read,
-{
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0.as_ref().read(buf)
+        todo!()
     }
 
-    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-        self.0.as_ref().read_vectored(bufs)
-    }
-}
-
-impl<S> Write for SharedSocket<S>
-where
-    for<'a> &'a S: Write,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.as_ref().write(buf)
-    }
-
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        self.0.as_ref().write_vectored(bufs)
-    }
-
-    #[inline]
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    /// The Session state in the Client consists of:
+    /// - QoS 1 and QoS 2 messages which have been sent to the Server, but have not been completely acknowledged.
+    /// - QoS 2 messages which have been received from the Server, but have not been completely acknowledged.
+    fn new_session(&self) {
+        // Dis
     }
 }

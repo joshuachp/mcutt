@@ -28,6 +28,31 @@ impl<S> Slab<S> {
     }
 }
 
+pub trait Access<T> {
+    /// Insert a new value in the first free element if there is still space in the slab.
+    fn insert<F, O>(&mut self, f: F) -> Option<O>
+    where
+        F: FnOnce(u16) -> (T, O);
+
+    /// Insert a new value in the first free element if there is still space in the slab.
+    ///
+    /// # Errors
+    ///
+    /// If the closures returns an error.
+    fn try_insert<F, O, E>(&mut self, f: F) -> Result<Option<O>, E>
+    where
+        F: FnOnce(u16) -> Result<(T, O), E>;
+
+    /// Removes an element from the slab given the index.
+    fn remove(&mut self, idx: u16) -> Option<T>;
+
+    /// Returns a reference to an occupied element given the index.
+    fn get(&self, idx: u16) -> Option<&T>;
+
+    /// Returns a mutable reference to an occupied element given the index.
+    fn get_mut(&mut self, idx: u16) -> Option<&mut T>;
+}
+
 #[cfg(feature = "alloc")]
 impl<T> Slab<Vec<Entry<T>>> {
     /// Insert a new value in the first free element if there is still space in the slab.

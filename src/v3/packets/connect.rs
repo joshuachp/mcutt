@@ -64,10 +64,15 @@ impl<'a> Connect<'a> {
     ///
     /// It's used to control the lifetime of the session state in the broker. Calling this function
     /// will set the clean session flag and session must be discarded for the broker.
-    pub fn clean_session(&mut self) -> &mut Self {
+    pub fn set_clean_session(&mut self) -> &mut Self {
         self.flags |= ConnectFlags::CLEAN_SESSION;
 
         self
+    }
+
+    /// Returns `true` if the CONNECT has the clean session flag set to 1.
+    pub fn has_clean_session(&self) -> bool {
+        self.flags.contains(ConnectFlags::CLEAN_SESSION)
     }
 
     /// Sets the will for the connection.
@@ -473,7 +478,7 @@ mod tests {
         );
 
         connect
-            .clean_session()
+            .set_clean_session()
             .will(will, Qos::AtLeastOnce, true)
             .username_password(
                 Str::try_from("username").unwrap(),

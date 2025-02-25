@@ -30,7 +30,7 @@ fn main() -> color_eyre::Result<()> {
 
     let mut connect = Connect::new(client_id, keep_alive);
 
-    connect.clean_session();
+    connect.set_clean_session();
 
     let connack = connection.connect(&connect)?;
 
