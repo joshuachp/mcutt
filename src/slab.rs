@@ -28,8 +28,7 @@ impl<S> Slab<S> {
     }
 }
 
-#[cfg(feature = "alloc")]
-impl<T> Slab<Vec<Entry<T>>> {
+impl<S> Slab<S> {
     /// Insert a new value in the first free element if there is still space in the slab.
     pub fn insert<F, O>(&mut self, f: F) -> Option<O>
     where

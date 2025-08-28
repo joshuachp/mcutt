@@ -2,3 +2,4 @@
 
 pub(crate) mod bytes;
 pub mod packets;
+pub mod traits;

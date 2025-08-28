@@ -10,3 +10,5 @@ pub mod slab;
 #[cfg(feature = "sync")]
 pub mod sync;
 pub mod v3;
+
+mod memory;
