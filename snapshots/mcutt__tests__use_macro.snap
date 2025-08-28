@@ -1,0 +1,5 @@
+---
+source: src/lib.rs
+expression: "\"used the macro\""
+---
+used the macro

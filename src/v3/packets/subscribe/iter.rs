@@ -1,91 +1,107 @@
-//! Iterators over a [`Subscribe`](super::Subscribe) filters.
+//! Iterator over the topic filters in a SUBSCRIBE packet.
 
-use core::{ops::Deref, slice};
+use crate::bytes::{Decode, Error};
 
-use super::{SubAckCode, SubAckCodeCursor, SubscribeTopic};
+use super::topic::TopicFilter;
 
-/// Iterator over the [`Subscribe`](super::Subscribe) filters
+/// Cursor to iterator over the [`SubscribeTopic`] encoded in a buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RawSubscribeCursor<'a> {
+    pub(super) bytes: &'a [u8],
+    pub(super) pos: usize,
+}
+
+impl<'a> RawSubscribeCursor<'a> {
+    fn read(&mut self) -> Option<Result<TopicFilter<'a>, Error>> {
+        debug_assert!(self.pos <= self.bytes.len());
+
+        let bytes = self
+            .bytes
+            .get(self.pos..)
+            .filter(|bytes| !bytes.is_empty())?;
+
+        let (topic, rest) = match TopicFilter::parse(bytes) {
+            Ok(filter) => filter,
+            Err(err) => return Some(Err(err)),
+        };
+
+        debug_assert!(rest.len() < bytes.len());
+        self.pos += bytes.len().saturating_sub(rest.len());
+
+        Some(Ok(topic))
+    }
+}
+
+impl<'a> Iterator for RawSubscribeCursor<'a> {
+    type Item = Result<TopicFilter<'a>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.read()
+    }
+}
+
+/// Cursor to iterator over the [`TopicFilter`] encoded in a buffer.
+///
+/// Panics if the SUBSCRIBE packet is invalid.
 #[derive(Debug, Clone, Copy)]
-pub struct Iter<I> {
-    iter: I,
-}
+pub(super) struct SubscriberCursor<'a>(pub(super) RawSubscribeCursor<'a>);
 
-impl<I> Iter<I> {
-    pub(crate) fn new<T>(into: T) -> Self
-    where
-        T: IntoIterator<IntoIter = I>,
-    {
-        Self {
-            iter: into.into_iter(),
-        }
-    }
-}
-
-impl<'a, I, S> Iterator for Iter<I>
-where
-    I: Iterator<Item = &'a SubscribeTopic<S>>,
-    S: Deref<Target = str> + 'a,
-{
-    type Item = SubscribeTopic<&'a str>;
+impl<'a> Iterator for SubscriberCursor<'a> {
+    type Item = TopicFilter<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|topic| topic.into())
+        self.0
+            .next()
+            .map(|filter| filter.expect("must be a valid SUBSCRIBE packet"))
     }
 }
 
-/// Iterator of the [`SubAckCode`] for the [`SubAckCodeCursor`]
-#[derive(Debug, Clone)]
-pub struct SubAckCodeIter<'a> {
-    iter: slice::Iter<'a, u8>,
-}
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
 
-impl<'a> SubAckCodeIter<'a> {
-    pub(crate) fn new(cursor: &'a SubAckCodeCursor<'_>) -> Self {
-        Self {
-            iter: cursor.bytes.iter(),
+    use super::*;
+
+    use crate::v3::packets::subscribe::topic::RequestedQos;
+
+    #[test]
+    fn iter_subscribe_cursor() {
+        let payload: [u8; _] = [
+            // Topic len 3
+            0b0000_0000,
+            0b0000_0011,
+            b'a',
+            b'/',
+            b'b',
+            // Qos(1)
+            0b0000_0001,
+            // Topic len 3
+            0b0000_0000,
+            0b0000_0011,
+            b'c',
+            b'/',
+            b'd',
+            // Qos(2)
+            0b0000_0010,
+        ];
+
+        let exp = [
+            ("a/b", RequestedQos::AtLeastOnce),
+            ("c/d", RequestedQos::ExactlyOnce),
+        ];
+
+        let mut cursor = RawSubscribeCursor {
+            bytes: &payload,
+            pos: 0,
+        };
+
+        for (exp_topic, exp_qos) in exp {
+            let filter = cursor.read().unwrap().unwrap();
+
+            assert_eq!(filter.topic().as_str(), exp_topic);
+            assert_eq!(*filter.qos(), exp_qos);
         }
-    }
-}
 
-impl Iterator for SubAckCodeIter<'_> {
-    type Item = SubAckCode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.iter.next()?;
-
-        unwrap_return_code(next)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-
-    fn count(self) -> usize
-    where
-        Self: Sized,
-    {
-        self.iter.count()
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        let next = self.iter.nth(n)?;
-
-        unwrap_return_code(next)
-    }
-}
-
-impl ExactSizeIterator for SubAckCodeIter<'_> {
-    fn len(&self) -> usize {
-        self.iter.len()
-    }
-}
-
-fn unwrap_return_code(next: &u8) -> Option<SubAckCode> {
-    match SubAckCode::try_from(*next) {
-        Ok(code) => Some(code),
-        Err(err) => {
-            // We checked the validity during construction of the cursor
-            unreachable!("the cursor must be a valid filter: {err}")
-        }
+        assert!(cursor.read().is_none());
     }
 }
