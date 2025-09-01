@@ -28,4 +28,4 @@ sync = ["std", "dep:fnv"]
 [dev-dependencies]
 color-eyre = "0.6.3"
 pretty_assertions = "1.4.1"
-tracing-subscriber = "0.3.18"
+tracing-subscriber = "0.3.20"
