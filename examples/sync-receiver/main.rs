@@ -1,8 +1,11 @@
+use std::num::NonZero;
 use std::{net::TcpStream, time::Duration};
 
-use mcutt::sync::Connection;
+use mcutt::sync::{Connection, Receiver, Sender};
 use mcutt::v3::packets::connect::KeepAlive;
 use mcutt::v3::packets::connect::builder::ConnectBuilder;
+use mcutt::v3::packets::subscribe::builder::{SubscribeBuilder, SubscribeFilter};
+use mcutt::v3::packets::subscribe::topic::RequestedQos;
 use tracing::debug;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -34,7 +37,15 @@ fn main() -> color_eyre::Result<()> {
 
     debug!(%connack);
 
-    connection.subscribe("interval/seconds")?;
+    const PKID: NonZero<u16> = NonZero::new(1).unwrap();
+
+    connection.subscribe(&SubscribeBuilder::with_topic(
+        PKID,
+        &SubscribeFilter {
+            topic: "interval/seconds",
+            qos: RequestedQos::AtMostOnce,
+        },
+    ))?;
 
     loop {
         connection.recv()?;
