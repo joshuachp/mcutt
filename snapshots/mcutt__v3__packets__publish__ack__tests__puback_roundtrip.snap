@@ -1,0 +1,9 @@
+---
+source: src/v3/packets/publish/ack.rs
+expression: Hexdump(buf)
+---
+Length: 4 (0x4) bytes
+0000: | 0100 0000 | (40) '@'
+0001: | 0000 0010 | (02) '.'
+0002: | 0000 0000 | (00) '.'
+0003: | 0000 1010 | (0a) '.'

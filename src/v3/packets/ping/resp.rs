@@ -1,17 +1,24 @@
-//! Handle the DISCONNECT Packet.
+//! Handle PINGRESP packet for KeepAlive processing.
+
+use std::fmt::Display;
 
 use crate::bytes::{Decode, Encode, Input, Parsed};
+use crate::v3::packets::common::fixed::builder::FixedHeaderBuilder;
 use crate::v3::packets::common::fixed::{ControlPacketType, FixedHeaderArray};
 
-use super::common::fixed::builder::FixedHeaderBuilder;
-
-/// The DISCONNECT Packet is the final Control Packet sent from the Client to the Server.
+/// The PINGRESP Packet is sent by the Server to the Client in response to a PINGREQ Packet.
 ///
-/// It indicates that the Client is disconnecting cleanly.
+/// It indicates that the server is alive.
 #[derive(Debug, Clone, Copy)]
-pub struct Disconnect {}
+pub struct PingResp {}
 
-impl Input<()> for Disconnect {
+impl Display for PingResp {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", ControlPacketType::PingResp)
+    }
+}
+
+impl Input<()> for PingResp {
     type Validated = ();
 
     fn validate_value(_value: &()) -> Result<Self::Validated, crate::bytes::Error> {
@@ -19,13 +26,13 @@ impl Input<()> for Disconnect {
     }
 }
 
-impl Parsed for Disconnect {
+impl Parsed for PingResp {
     fn validate(&self) -> Result<(), crate::bytes::Error> {
         Ok(())
     }
 }
 
-impl Encode<()> for Disconnect {
+impl Encode<()> for PingResp {
     fn encode_len(_value: &()) -> Result<usize, crate::bytes::Error> {
         Ok(0)
     }
@@ -34,17 +41,17 @@ impl Encode<()> for Disconnect {
     where
         W: std::io::Write,
     {
-        FixedHeaderBuilder::new(ControlPacketType::Disconnect).write_sync(writer)
+        FixedHeaderBuilder::new(ControlPacketType::PingResp).write_sync(writer)
     }
 }
 
-impl<'a> Decode<'a> for Disconnect {
+impl<'a> Decode<'a> for PingResp {
     type Out = Self;
 
     fn parse(buf: &'a [u8]) -> Result<(Self::Out, &'a [u8]), crate::bytes::Error> {
         let (fixed, rest) = FixedHeaderArray::<0>::parse(buf)?;
         // TODO: should this be an error?
-        debug_assert_eq!(fixed.packet_type(), ControlPacketType::Disconnect);
+        debug_assert_eq!(fixed.packet_type(), ControlPacketType::PingResp);
 
         Ok((Self {}, rest))
     }
@@ -52,20 +59,18 @@ impl<'a> Decode<'a> for Disconnect {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
     use crate::tests::{Hexdump, insta_snapshots};
 
     use super::*;
 
     #[test]
-    fn disconnect_roundtrip() {
+    fn should_encode_and_decode_pingresp() {
         let mut buf = Vec::new();
 
-        let written = Disconnect::write_sync(&mut buf, &()).unwrap();
+        let written = PingResp::write_sync(&mut buf, &()).unwrap();
         assert_eq!(buf.len(), written);
 
-        Disconnect::parse(&buf).unwrap();
+        PingResp::parse(&buf).unwrap();
 
         insta_snapshots!({
             insta::assert_snapshot!(Hexdump(buf));
