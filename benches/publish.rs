@@ -6,6 +6,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use mcutt::sync::Connection;
 use mcutt::v3::packets::connect::KeepAlive;
 use mcutt::v3::packets::connect::builder::ConnectBuilder;
+use mcutt::v3::packets::publish::builder::PublishBuilder;
 
 fn connect() -> eyre::Result<Connection<TcpStream, TcpStream>> {
     let connection = TcpStream::connect("127.0.0.1:1883")?;
@@ -31,8 +32,10 @@ fn connect() -> eyre::Result<Connection<TcpStream, TcpStream>> {
 pub fn publish(c: &mut Criterion) {
     let mut connect = connect().unwrap();
 
+    let publish = PublishBuilder::new("topic", &[42]);
+
     c.bench_function("publish packet", |b| {
-        b.iter(|| connect.publish(black_box("topic"), black_box(&[42])))
+        b.iter(|| connect.publish(black_box(&publish)))
     });
 }
 

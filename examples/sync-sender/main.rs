@@ -4,6 +4,7 @@ use std::{net::TcpStream, time::Duration};
 use mcutt::sync::Connection;
 use mcutt::v3::packets::connect::KeepAlive;
 use mcutt::v3::packets::connect::builder::ConnectBuilder;
+use mcutt::v3::packets::publish::builder::PublishBuilder;
 use tracing::debug;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -39,7 +40,10 @@ fn main() -> color_eyre::Result<()> {
 
     loop {
         let value = instant.elapsed().as_secs().to_be_bytes();
-        connection.publish("interval/seconds", value.as_slice())?;
+
+        let publish = PublishBuilder::new("interval/seconds", value.as_slice());
+
+        connection.publish(&publish)?;
 
         std::thread::sleep(Duration::from_secs(1));
     }

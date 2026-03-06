@@ -49,7 +49,7 @@ pub struct PublishBuilder<'a> {
 
 impl<'a> PublishBuilder<'a> {
     /// Create a new publish packet with the given topic and payload.
-    pub(crate) fn new(topic: &'a str, payload: &'a [u8]) -> Self {
+    pub fn new(topic: &'a str, payload: &'a [u8]) -> Self {
         Self {
             flags: TypeFlags::empty(),
             pkid: None,
@@ -58,14 +58,15 @@ impl<'a> PublishBuilder<'a> {
         }
     }
 
-    pub(crate) fn retain(mut self) -> Self {
+    /// Sets the retain flag on the packet
+    pub fn retain(mut self) -> Self {
         self.flags |= TypeFlags::PUBLISH_RETAIN;
 
         self
     }
 
     /// Sets the QoS of the publish
-    pub(crate) fn qos(mut self, qos: PublishQos) -> Self {
+    pub fn qos(mut self, qos: PublishQos) -> Self {
         // TODO: maybe add a type parameter to the builder so this can only be called once
         self.flags &= !(TypeFlags::PUBLISH_QOS_1 | TypeFlags::PUBLISH_QOS_2);
 

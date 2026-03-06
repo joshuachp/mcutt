@@ -201,15 +201,15 @@ mod tests {
 
     #[test]
     fn suback_roundtrip() {
-        let suback = SubAckBuilder::new(
-            NonZero::new(10u16).unwrap(),
-            &[
+        let suback = SubAckBuilder {
+            pkid: NonZero::new(10u16).unwrap(),
+            return_codes: &[
                 SubAckCode::Qos0,
                 SubAckCode::Qos1,
                 SubAckCode::Qos2,
                 SubAckCode::Failure,
             ],
-        );
+        };
 
         let mut buf = Vec::new();
 
