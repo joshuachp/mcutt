@@ -1,5 +1,5 @@
 use std::num::NonZero;
-use std::{net::TcpStream, time::Duration};
+use std::time::Duration;
 
 use mcutt::sync::{Connection, Receiver, Sender};
 use mcutt::v3::packets::connect::KeepAlive;
@@ -18,14 +18,9 @@ fn main() -> color_eyre::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .try_init()?;
 
-    let connection = TcpStream::connect("127.0.0.1:1883")?;
-    connection.set_nodelay(true)?;
-    connection.set_read_timeout(Some(Duration::from_secs(10)))?;
-    connection.set_write_timeout(Some(Duration::from_secs(10)))?;
+    let mut connection = Connection::create("127.0.0.1:1883", Duration::from_secs(10))?;
 
-    let mut connection = Connection::new(connection.try_clone()?, connection);
-
-    let keep_alive = KeepAlive::try_from(Duration::from_secs(10))?;
+    let keep_alive = KeepAlive::try_from(Duration::from_secs(30))?;
 
     let connect = ConnectBuilder::create("mcutt-sync-receiver")?
         .clean_session()

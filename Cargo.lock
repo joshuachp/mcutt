@@ -530,6 +530,7 @@ dependencies = [
  "mio",
  "pretty_assertions",
  "rstest",
+ "rustix",
  "tracing",
  "tracing-subscriber",
  "zerocopy",
