@@ -1,5 +1,4 @@
 use std::hint::black_box;
-use std::net::TcpStream;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -8,15 +7,10 @@ use mcutt::v3::packets::connect::KeepAlive;
 use mcutt::v3::packets::connect::builder::ConnectBuilder;
 use mcutt::v3::packets::publish::builder::PublishBuilder;
 
-fn connect() -> eyre::Result<Connection<TcpStream, TcpStream>> {
-    let connection = TcpStream::connect("127.0.0.1:1883")?;
-    connection.set_nodelay(true)?;
-    connection.set_read_timeout(Some(Duration::from_secs(10)))?;
-    connection.set_write_timeout(Some(Duration::from_secs(10)))?;
+fn connect() -> eyre::Result<Connection<mio::net::TcpStream>> {
+    let mut connection = Connection::create("127.0.0.1:1883", Duration::from_secs(10))?;
 
-    let mut connection = Connection::new(connection.try_clone()?, connection);
-
-    let keep_alive = KeepAlive::try_from(Duration::from_secs(0))?;
+    let keep_alive = KeepAlive::try_from(Duration::from_secs(30))?;
 
     let connect = ConnectBuilder::create("mcutt-bench")?
         .clean_session()
@@ -30,7 +24,7 @@ fn connect() -> eyre::Result<Connection<TcpStream, TcpStream>> {
 }
 
 pub fn publish(c: &mut Criterion) {
-    let mut connect = connect().unwrap();
+    let connect = connect().unwrap();
 
     let publish = PublishBuilder::new("topic", &[42]);
 
