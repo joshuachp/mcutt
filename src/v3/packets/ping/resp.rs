@@ -49,7 +49,7 @@ impl<'a> Decode<'a> for PingResp {
     type Out = Self;
 
     fn parse(buf: &'a [u8]) -> Result<(Self::Out, &'a [u8]), crate::bytes::Error> {
-        let (fixed, rest) = FixedHeaderArray::<0>::parse(buf)?;
+        let (fixed, rest) = FixedHeaderArray::<1>::parse(buf)?;
         // TODO: should this be an error?
         debug_assert_eq!(fixed.packet_type(), ControlPacketType::PingResp);
 
